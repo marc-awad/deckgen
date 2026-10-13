@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     ollama_url: str
     ollama_model: str
     ollama_timeout: float = 120
-    ollama_num_ctx: int = 8192
+    ollama_num_ctx: int = 12288
 
 
 def load_settings() -> Settings:

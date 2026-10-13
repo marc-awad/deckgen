@@ -25,3 +25,39 @@ Même extrait de cours (namespaces, cgroups, capabilities), même prompt, format
 - Un prompt non cadré fait inventer le modèle : le prompt impose de n'utiliser que le cours fourni
 - Le contexte par défaut est de 4096 tokens : à augmenter ou découper le cours pour les textes longs
 - Avec peu de notions dans le cours, gemma3:4b peut encore répéter une notion ou ajouter un détail absent du texte, malgré les consignes du prompt. Le modèle gemma4:latest réduit ce problème.
+
+## Diagnostic de l'issue #27
+
+### Constat
+Avec un cours Java de 10 427 caractères et `count=10`, `POST /generate` renvoyait parfois une seule carte, avec un statut 200. Un autre essai avait produit 19 cartes.
+
+### Méthode
+Un script temporaire appelait directement l'API Ollama avec exactement le prompt, le JSON schema et les options du generator (gemma3:4b, température 0,3, `num_ctx` 8192). 4 configurations ont été comparées, 3 essais chacune car le modèle n'est pas déterministe. Pour chaque essai : nombre de cartes avant et après nettoyage, `done_reason`, tokens du prompt et de la réponse.
+
+| Configuration | Cartes (3 essais) | `done_reason` |
+|---|---|---|
+| a. Prompt actuel, gemma3:4b + JSON schema | 10, 10, **1** | stop |
+| b. Sans la consigne « génère moins de cartes » | **1**, 10, **1** | stop |
+| c. Format `"json"` au lieu du JSON schema | 0, 0, 0 (`{}`) | stop |
+| d. gemma4:latest | 10, 10, 10 (58 à 87 s) | stop |
+
+- Prompt de 3 328 tokens sur 8 192 : le cours n'est pas tronqué.
+- Le nettoyage ne retire aucune carte : le modèle produit lui-même une seule carte.
+- Les réponses à une carte sont toutes écrites en JSON compact sur une ligne.
+
+### Cause
+Le JSON schema n'imposait ni minimum ni maximum de cartes. La grammaire d'Ollama autorisait donc à fermer le tableau `cards` dès la première carte, et gemma3:4b le faisait dans 3 essais sur 6 (configurations a et b). Sans maximum, il pouvait aussi dépasser `count` (19 cartes).
+
+### Correction
+- **Bornes dans le JSON schema**, construit pour chaque requête : `maxItems = count` et `minItems = min(count, max(1, ceil(caractères / 2000)))`, soit une carte minimum par tranche de 2 000 caractères. Ollama 0.40.3 applique bien ces contraintes : avec `minItems = maxItems = 6`, 6 cartes dans 4 essais sur 4 ; avec `maxItems = 2`, jamais plus de 2 cartes.
+- **Prompt cohérent** : « entre {min} et {count} cartes, une par notion importante, peu de cartes si le cours contient peu de notions ». Une première version sans cette dernière consigne produisait 9 à 10 cartes répétitives sur un texte court.
+- **`num_ctx` porté à 12 288** : 20 000 caractères font environ 6 200 tokens, et avec 8 192 il ne restait qu'environ 2 000 tokens pour la réponse. gemma3:4b reste à 100 % sur le GPU (3,9 Go utilisés sur 6 Go).
+- **Observabilité** : un log INFO par appel (tokens, `done_reason`, durée, cartes brutes et nettoyées) et un warning si la réponse est coupée (`done_reason=length`).
+
+### Effet mesuré
+
+| Test | Avant | Après |
+|---|---|---|
+| Cours Java (10 427 car.), `count=10`, 6 essais | 1 carte dans 3 essais sur 6 | 10, 6, 10, 10, 8, 10 : minimum de 6 toujours respecté |
+| Texte court (150 car.), `count=10`, 3 essais | | 2, 2, 2 : aucune notion répétée, rien d'inventé |
+| 20 000 car., `count=30`, 1 essai | Risque de réponse coupée | `done_reason=stop`, 6 220 tokens de prompt, 100 % GPU |

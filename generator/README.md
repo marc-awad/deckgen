@@ -24,6 +24,11 @@ Réponse :
 { "cards": [{ "front": "Question ?", "back": "Réponse." }] }
 ```
 
+Nombre de cartes : `count` est un maximum. Un minimum est aussi imposé au modèle, à raison d'une
+carte par tranche de 2 000 caractères de cours (plafonné à `count`) : 1 carte minimum pour un
+texte court, 6 pour 10 400 caractères. Les deux bornes sont envoyées à Ollama dans le JSON schema
+(`minItems`, `maxItems`), qui contraint la génération.
+
 Codes d'erreur :
 
 | Code | Cause                                                        |
@@ -42,7 +47,7 @@ Elles sont lues depuis l'environnement, puis depuis `generator/.env` s'il existe
 | `OLLAMA_URL`     | Oui         |        | URL d'Ollama, ex. `http://localhost:11434`   |
 | `OLLAMA_MODEL`   | Oui         |        | Modèle utilisé, ex. `gemma3:4b`              |
 | `OLLAMA_TIMEOUT` | Non         | `120`  | Délai maximal d'une génération, en secondes  |
-| `OLLAMA_NUM_CTX` | Non         | `8192` | Taille du contexte du modèle, en tokens      |
+| `OLLAMA_NUM_CTX` | Non         | `12288` | Taille du contexte du modèle, en tokens (prompt + réponse) |
 
 Si une variable obligatoire manque, le service refuse de démarrer.
 
