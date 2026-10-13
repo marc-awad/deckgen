@@ -24,3 +24,4 @@ Même extrait de cours (namespaces, cgroups, capabilities), même prompt, format
 ## Points d'attention
 - Un prompt non cadré fait inventer le modèle : le prompt impose de n'utiliser que le cours fourni
 - Le contexte par défaut est de 4096 tokens : à augmenter ou découper le cours pour les textes longs
+- Avec peu de notions dans le cours, gemma3:4b peut encore répéter une notion ou ajouter un détail absent du texte, malgré les consignes du prompt. Le modèle gemma4:latest réduit ce problème.

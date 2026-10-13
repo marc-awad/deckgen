@@ -18,6 +18,10 @@ const envSchema = z.object({
   POSTGRES_PASSWORD: z.string().min(1),
   POSTGRES_DB: z.string().min(1),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+  // Trailing slashes removed so that `${GENERATOR_URL}/generate` is always a valid URL
+  GENERATOR_URL: z.url({ protocol: /^https?$/ }).transform((url) => url.replace(/\/+$/, "")),
+  // Longer than the generator's own limit (2 attempts of 120 s)
+  GENERATOR_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
 });
 
 export type Config = z.infer<typeof envSchema>;
