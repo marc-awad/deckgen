@@ -83,6 +83,7 @@ npm install
 | `npm run preview`   | Sert le contenu de `dist/` en local, avec le même proxy `/api`    |
 | `npm run lint`      | Vérifie le code avec ESLint                                       |
 | `npm run typecheck` | Vérifie les types TypeScript sans compiler                        |
+| `npm test`          | Lance les tests des fonctions pures (voir la section Tests)       |
 
 ## Lancer l'application complète en local
 
@@ -129,3 +130,21 @@ src/
   main.tsx          # point d'entrée React
   index.css         # Tailwind et style du focus clavier
 ```
+
+## Tests
+
+Les tests utilisent Vitest et portent uniquement sur les fonctions pures, placées à côté du code
+testé :
+
+| Fichier                  | Ce qui est testé                                                      |
+|--------------------------|-----------------------------------------------------------------------|
+| `src/validation.test.ts` | Règles du formulaire de génération et des cartes : `trim`, bornes exactes (100, 50, 20 000, 1, 30, 500) |
+| `src/format.test.ts`     | Nombres (`20 000`), dates en français, « 0 carte », « 1 carte », « 2 cartes » |
+
+```powershell
+npm test
+```
+
+Ces fonctions ne font aucun appel réseau : les tests n'ont besoin ni de l'api ni d'un navigateur.
+Les fichiers `*.test.ts` sont vérifiés par `npm run typecheck`, mais n'entrent pas dans le build :
+aucun fichier de l'application ne les importe.
