@@ -117,3 +117,21 @@ Pourquoi aucun service externe n'est nécessaire :
 - Les routes sont testées avec `TestClient`, qui appelle l'application en mémoire. Le vrai client
   Ollama est remplacé par un faux grâce à `app.dependency_overrides`.
 - Les tests async (`async def test_...`) tournent grâce à `pytest-asyncio` en mode `auto`.
+
+## Docker
+
+Image multi-stage basée sur `python:3.13.16-slim-trixie`, utilisateur non-root (uid 10001),
+port 8000. Détails et tailles : [docs/docker-images.md](../docs/docker-images.md).
+
+Depuis la racine du dépôt (Ollama tourne sur l'hôte) :
+
+```powershell
+docker build -t deckgen-generator:dev ./generator
+docker run --rm -p 8000:8000 `
+  -e OLLAMA_URL=http://host.docker.internal:11434 `
+  -e OLLAMA_MODEL=gemma3:4b `
+  deckgen-generator:dev
+```
+
+`host.docker.internal` désigne la machine hôte depuis un conteneur Docker Desktop.
+`docker ps` affiche `(healthy)` quand `/health` répond.

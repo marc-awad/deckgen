@@ -148,3 +148,30 @@ npm test
 Ces fonctions ne font aucun appel réseau : les tests n'ont besoin ni de l'api ni d'un navigateur.
 Les fichiers `*.test.ts` sont vérifiés par `npm run typecheck`, mais n'entrent pas dans le build :
 aucun fichier de l'application ne les importe.
+
+## Docker
+
+Image multi-stage : compilation avec `node:24.21.0-alpine3.24`, puis service des fichiers par
+`nginxinc/nginx-unprivileged:1.30.5-alpine3.24` (non-root, uid 101, port 8080). La configuration
+nginx est dans [nginx/default.conf.template](nginx/default.conf.template). Détails et tailles :
+[docs/docker-images.md](../docs/docker-images.md).
+
+| Variable          | Défaut     | Rôle                                                   |
+|-------------------|------------|--------------------------------------------------------|
+| `API_UPSTREAM`    | `api:3000` | Adresse (hôte:port) de l'api vers laquelle nginx envoie `/api/` |
+
+Depuis la racine du dépôt :
+
+```powershell
+docker build -t deckgen-frontend:dev ./frontend
+
+# Seul : la page s'affiche, /api/ répond 502 tant que l'api n'est pas joignable
+docker run --rm -p 8080:8080 deckgen-frontend:dev
+
+# Avec l'api lancée sur l'hôte (npm run dev dans api/)
+docker run --rm -p 8080:8080 -e API_UPSTREAM=host.docker.internal:3000 deckgen-frontend:dev
+```
+
+Puis ouvrir http://localhost:8080. nginx joue en production le rôle du proxy de Vite : il retire
+le préfixe `/api`, renvoie `index.html` pour les routes du front (fallback SPA) et répond lui-même
+sur `/health`.
