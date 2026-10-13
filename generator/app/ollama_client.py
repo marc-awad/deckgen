@@ -1,4 +1,6 @@
 import logging
+import math
+from typing import Any
 
 import httpx
 from pydantic import ValidationError
@@ -11,9 +13,38 @@ logger = logging.getLogger(__name__)
 # First try plus one retry
 MAX_ATTEMPTS = 2
 
+# At least one card per started block of 2 000 characters of course (issue #27)
+CHARS_PER_REQUIRED_CARD = 2000
+
 
 class InvalidModelResponseError(Exception):
     """The model output could not be turned into valid flashcards."""
+
+
+def min_cards_for(text: str, count: int) -> int:
+    """Minimum number of cards: grows with the course length, never above count."""
+    return min(count, max(1, math.ceil(len(text) / CHARS_PER_REQUIRED_CARD)))
+
+
+def build_format(min_cards: int, max_cards: int) -> dict[str, Any]:
+    """JSON schema of GenerateResponse, with bounds on the number of cards."""
+    # model_json_schema() returns a new dict: the schema shown in /docs is not changed
+    schema = GenerateResponse.model_json_schema()
+    schema["properties"]["cards"]["minItems"] = min_cards
+    schema["properties"]["cards"]["maxItems"] = max_cards
+    return schema
+
+
+def parse_cards(raw_output: str) -> list[Card] | None:
+    """Cards of the model output, or None if it does not match the schema."""
+    try:
+        return GenerateResponse.model_validate_json(raw_output).cards
+    except ValidationError as exc:
+        # include_input=False: the model output may quote the course
+        logger.warning(
+            "Invalid model output: %s", exc.errors(include_url=False, include_input=False)
+        )
+        return None
 
 
 class OllamaClient:
@@ -24,29 +55,45 @@ class OllamaClient:
 
     async def generate_cards(self, text: str, count: int) -> list[Card]:
         """Ask the model for flashcards, retrying once if its output is invalid."""
+        min_cards = min_cards_for(text, count)
         payload = {
             "model": self.model,
-            "prompt": build_prompt(text, count),
+            "prompt": build_prompt(text, min_cards, count),
             "stream": False,
             # Structured outputs: Ollama forces the answer to match this JSON schema
-            "format": GenerateResponse.model_json_schema(),
+            "format": build_format(min_cards, count),
             "options": {"temperature": 0.3, "num_ctx": self.num_ctx},
         }
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             response = await self.http_client.post("/api/generate", json=payload)
             response.raise_for_status()
-            raw_output = response.json().get("response", "")
+            data = response.json()
 
-            try:
-                result = GenerateResponse.model_validate_json(raw_output)
-            except ValidationError as exc:
+            if data.get("done_reason") == "length":
                 logger.warning(
-                    "Invalid model output (attempt %d/%d): %s", attempt, MAX_ATTEMPTS, exc
+                    "Model output cut at num_ctx=%d tokens (done_reason=length): "
+                    "increase OLLAMA_NUM_CTX or shorten the course",
+                    self.num_ctx,
                 )
-                continue
 
-            cards = clean_cards(result.cards, count)
+            raw_cards = parse_cards(data.get("response", ""))
+            cards = clean_cards(raw_cards, count) if raw_cards is not None else []
+            logger.info(
+                "Ollama call: model=%s attempt=%d/%d prompt_eval_count=%s eval_count=%s "
+                "done_reason=%s duration=%.1fs min_cards=%d raw_cards=%s clean_cards=%d",
+                self.model,
+                attempt,
+                MAX_ATTEMPTS,
+                data.get("prompt_eval_count"),
+                data.get("eval_count"),
+                data.get("done_reason"),
+                data.get("total_duration", 0) / 1e9,
+                min_cards,
+                len(raw_cards) if raw_cards is not None else "invalid",
+                len(cards),
+            )
+
             if cards:
                 return cards
             logger.warning("No usable card in model output (attempt %d/%d)", attempt, MAX_ATTEMPTS)
