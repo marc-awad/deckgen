@@ -1,0 +1,27 @@
+# Only requirements.txt and app/ are needed to build the image
+
+# Local environment and caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Tests and coverage
+tests/
+.coverage
+htmlcov/
+
+# Secrets: configuration comes from the environment
+.env
+.env.*
+
+# Development files
+requirements-dev.txt
+pyproject.toml
+README.md
+Dockerfile
+.dockerignore
+.vscode/
+.idea/
+*.swp

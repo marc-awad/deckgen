@@ -196,3 +196,22 @@ Pourquoi aucun service externe n'est nécessaire :
 
 La couverture ne compte pas `src/index.ts` (démarrage du serveur) ni `src/db/client.ts` et
 `src/db/migrate.ts` (vraie connexion), remplacés par PGlite dans les tests.
+
+## Docker
+
+Image multi-stage basée sur `node:24.21.0-alpine3.24` (Node 24 dans l'image, Node 20 en local :
+le code fonctionne sur les deux), utilisateur `node` (uid 1000), port 3000, `tini` comme PID 1.
+Détails et tailles : [docs/docker-images.md](../docs/docker-images.md).
+
+Depuis la racine du dépôt, avec le PostgreSQL local et le generator lancés sur l'hôte :
+
+```powershell
+docker build -t deckgen-api:dev ./api
+docker run --rm -p 3000:3000 `
+  -e DB_HOST=host.docker.internal `
+  -e POSTGRES_USER=deckgen -e POSTGRES_PASSWORD=deckgen -e POSTGRES_DB=deckgen `
+  -e GENERATOR_URL=http://host.docker.internal:8000 `
+  deckgen-api:dev
+```
+
+Les migrations sont appliquées au démarrage. `docker stop` déclenche l'arrêt propre (SIGTERM).
