@@ -89,3 +89,31 @@ Invoke-RestMethod http://localhost:8000/generate -Method Post -ContentType "appl
 ```
 
 Pour corriger automatiquement : `ruff check --fix .` et `ruff format .`.
+
+## Tests
+
+Les tests sont dans `tests/` et utilisent pytest. Ils ne demandent ni Ollama ni accès réseau.
+
+| Fichier                 | Ce qui est testé                                                       |
+|-------------------------|------------------------------------------------------------------------|
+| `test_prompt.py`        | `build_prompt` : bornes min/max, cours délimité à la fin du prompt     |
+| `test_ollama_client.py` | `min_cards_for`, `build_format`, `clean_cards`, et le client Ollama : réponse valide, nouvelle tentative, échec après deux réponses invalides, warning `done_reason=length`, corps envoyé à Ollama |
+| `test_routes.py`        | `/health`, `/generate` en succès, erreurs 422, 502, 503 et 504          |
+
+```powershell
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\python -m pytest
+```
+
+Le rapport de couverture s'affiche à la fin (`--cov`, configuré dans `pyproject.toml`).
+
+Pourquoi aucun service externe n'est nécessaire :
+
+- `tests/conftest.py` définit des variables factices (`OLLAMA_URL=http://ollama.invalid:11434`)
+  avant l'import de l'application. Elles remplacent celles de `generator/.env`, et un nom en
+  `.invalid` ne peut jamais être résolu : un appel réseau oublié ferait échouer le test.
+- Le client Ollama est testé avec `httpx.MockTransport` : les requêtes sont reçues par une
+  fonction Python qui renvoie une réponse préparée, rien ne sort de la machine.
+- Les routes sont testées avec `TestClient`, qui appelle l'application en mémoire. Le vrai client
+  Ollama est remplacé par un faux grâce à `app.dependency_overrides`.
+- Les tests async (`async def test_...`) tournent grâce à `pytest-asyncio` en mode `auto`.

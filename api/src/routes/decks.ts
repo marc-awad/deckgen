@@ -1,6 +1,5 @@
 import { asc, count, DrizzleQueryError, desc, eq } from "drizzle-orm";
 import { Router } from "express";
-import pg from "pg";
 import { db } from "../db/client.js";
 import { cards, decks } from "../db/schema.js";
 import { HttpError } from "../errors.js";
@@ -23,12 +22,18 @@ type Card = typeof cards.$inferSelect;
 // PostgreSQL error code for a foreign key violation
 const FOREIGN_KEY_VIOLATION = "23503";
 
-// Drizzle wraps the node-postgres error: the PostgreSQL code is in err.cause.code
+// Drizzle wraps the driver error: the PostgreSQL code is in err.cause.code
+// (checked by value, so it works with node-postgres and with PGlite in the tests)
 function isForeignKeyViolation(err: unknown): boolean {
+  if (!(err instanceof DrizzleQueryError)) {
+    return false;
+  }
+  const cause: unknown = err.cause;
   return (
-    err instanceof DrizzleQueryError &&
-    err.cause instanceof pg.DatabaseError &&
-    err.cause.code === FOREIGN_KEY_VIOLATION
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    cause.code === FOREIGN_KEY_VIOLATION
   );
 }
 

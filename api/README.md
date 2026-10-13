@@ -131,7 +131,8 @@ Copy-Item .env.example .env
 | `npm run build`       | Compile TypeScript vers `dist/`                                |
 | `npm start`           | Lance la version compilée (`node dist/index.js`)               |
 | `npm run lint`        | Vérifie le code avec ESLint                                    |
-| `npm run typecheck`   | Vérifie les types sans compiler                                |
+| `npm run typecheck`   | Vérifie les types sans compiler (code et tests)                |
+| `npm test`            | Lance les tests (voir la section Tests)                        |
 | `npm run db:generate` | Génère une migration SQL après une modification du schéma      |
 
 Vérifier que l'API tourne :
@@ -158,3 +159,40 @@ fichier SQL créé, puis redémarrer l'API.
 Sur `SIGTERM` (envoyé par `docker stop` et par Kubernetes) ou `SIGINT` (Ctrl+C), l'API arrête
 d'accepter de nouvelles connexions, termine les requêtes en cours, ferme le pool PostgreSQL puis
 quitte. Au-delà de 10 secondes, l'arrêt est forcé.
+
+## Tests
+
+Les tests sont dans `tests/` et utilisent Vitest et supertest. Ils ne demandent ni PostgreSQL,
+ni generator, ni accès réseau.
+
+| Fichier                              | Ce qui est testé                                            |
+|--------------------------------------|-------------------------------------------------------------|
+| `anki-export.test.ts`                | Format de l'export Anki et nom de fichier (fonctions pures) |
+| `generator-client.test.ts`           | Client du generator : succès, injoignable, 503, 504, 502, autre statut, corps non JSON, contrat non respecté, délai dépassé |
+| `routes/health-and-errors.test.ts`   | `/health`, `/ready`, 404, 400 (JSON mal formé), 413, 422 (id invalide) |
+| `routes/decks.test.ts`               | Création, liste avec `cardCount`, lecture, renommage, suppression en cascade |
+| `routes/cards.test.ts`               | Modification et suppression d'une carte                     |
+| `routes/generate.test.ts`            | Génération : cartes ajoutées, 422 et 404 sans appel au generator, 503/504/502, aucune carte insérée en cas d'erreur, deck supprimé pendant la génération |
+| `routes/export.test.ts`              | En-têtes et contenu du fichier exporté                      |
+
+```powershell
+npm test                 # une exécution
+npm run test:watch       # relance les tests à chaque modification
+npm run test:coverage    # avec le rapport de couverture
+```
+
+Pourquoi aucun service externe n'est nécessaire :
+
+- **Base de données** : les tests de routes remplacent `src/db/client.ts` par
+  `tests/helpers/test-db.ts` (`vi.mock`). Ce module crée une base PostgreSQL en mémoire avec
+  PGlite (PostgreSQL compilé en WebAssembly) et lui applique les vraies migrations de `drizzle/`.
+  Les requêtes Drizzle, les contraintes et le `ON DELETE CASCADE` sont donc ceux de PostgreSQL.
+  La base est vidée avant chaque test (`TRUNCATE ... RESTART IDENTITY`).
+- **Generator** : les tests de routes remplacent la fonction `generateCards` par un mock, et les
+  tests du client remplacent `fetch`. Les délais dépassés sont simulés (erreur `TimeoutError`),
+  sans attente réelle.
+- **Configuration** : `vitest.config.ts` définit toutes les variables lues par `config.ts`, avec
+  des hôtes en `.invalid` qui ne peuvent jamais être résolus : `api/.env` n'est jamais utilisé.
+
+La couverture ne compte pas `src/index.ts` (démarrage du serveur) ni `src/db/client.ts` et
+`src/db/migrate.ts` (vraie connexion), remplacés par PGlite dans les tests.
