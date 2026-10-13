@@ -1,0 +1,14 @@
+# Override: gives the NVIDIA GPU(s) of the machine to Ollama. Everything else comes from
+# docker-compose.yml. Requires an NVIDIA driver (and Docker Desktop with WSL 2 on Windows).
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+# or set COMPOSE_FILE in .env (see .env.example) to keep using "docker compose up".
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
