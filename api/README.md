@@ -1,11 +1,8 @@
 # api
 
 API REST de deckgen (Node.js, Express, TypeScript). Elle stocke les paquets de cartes (`decks`)
-et les cartes (`cards`) dans PostgreSQL. Elle appellera plus tard le service `generator` pour
-créer des cartes et proposera l'export vers Anki.
-
-Pour l'instant, le service contient le socle : configuration validée, connexion à PostgreSQL,
-migrations appliquées au démarrage, sondes de santé et arrêt propre.
+et les cartes (`cards`) dans PostgreSQL, appelle le service `generator` pour créer des cartes à
+partir d'un texte de cours, et exporte un deck au format texte importable dans Anki.
 
 ## Versions de Node
 
@@ -22,13 +19,69 @@ plus récente par erreur. La même base de code tourne donc en local (Node 20) e
 
 ## Routes
 
-| Méthode | Route     | Rôle                                                                     |
-|---------|-----------|--------------------------------------------------------------------------|
-| GET     | `/health` | Sonde de vie : `{"status": "ok"}`, sans interroger la base               |
-| GET     | `/ready`  | Sonde de disponibilité : `{"status": "ready"}` si la base répond, sinon 503 `{"status": "unavailable"}` |
+| Méthode | Chemin                | Corps                    | Réponses possibles                       |
+|---------|-----------------------|--------------------------|------------------------------------------|
+| GET     | `/health`             |                          | 200 `{"status": "ok"}` (sonde de vie, sans interroger la base) |
+| GET     | `/ready`              |                          | 200 `{"status": "ready"}`, 503 `{"status": "unavailable"}` (sonde de disponibilité) |
+| GET     | `/decks`              |                          | 200 liste `[{id, name, createdAt, cardCount}]`, du plus récent au plus ancien |
+| POST    | `/decks`              | `{name}`                 | 201 deck créé, 422                       |
+| GET     | `/decks/:id`          |                          | 200 `{id, name, createdAt, cards: [...]}` (cartes triées par id), 404, 422 |
+| PUT     | `/decks/:id`          | `{name}`                 | 200 deck modifié, 404, 422               |
+| DELETE  | `/decks/:id`          |                          | 204 (les cartes sont supprimées avec le deck), 404, 422 |
+| POST    | `/decks/:id/generate` | `{text, count}`          | 201 `{cards: [...]}` (cartes **ajoutées** au deck), 404, 422, 502, 503, 504 |
+| GET     | `/decks/:id/export`   |                          | 200 fichier texte Anki, 404, 422         |
+| PUT     | `/cards/:id`          | `{front, back}`          | 200 carte modifiée, 404, 422             |
+| DELETE  | `/cards/:id`          |                          | 204, 404, 422                            |
 
-Une route inconnue renvoie 404 `{"detail": "Route introuvable"}`, une erreur inattendue renvoie
-500 `{"detail": "Erreur interne du serveur"}` (le détail est uniquement dans les logs).
+Une carte renvoyée a la forme `{id, deckId, front, back, createdAt}`.
+
+### Règles de validation
+
+| Champ   | Règle                                                                  |
+|---------|------------------------------------------------------------------------|
+| `:id`   | Entier de 1 à 2 147 483 647 (limite d'une colonne `integer`)           |
+| `name`  | Texte, espaces de début et fin retirés, 1 à 100 caractères             |
+| `front`, `back` | Texte, espaces de début et fin retirés, 1 à 500 caractères     |
+| `text`  | Texte, espaces de début et fin retirés, 50 à 20 000 caractères         |
+| `count` | Entier de 1 à 30, 5 par défaut (nombre **maximal** de cartes)          |
+
+Les règles de `text` et `count` sont celles du generator : l'API les vérifie avant de l'appeler.
+
+### Erreurs
+
+Toutes les erreurs ont la forme `{"detail": "..."}`, en français :
+
+| Code | Cause                                                                     |
+|------|---------------------------------------------------------------------------|
+| 400  | Corps JSON mal formé                                                      |
+| 404  | Deck, carte ou route introuvable                                          |
+| 413  | Corps de plus de 100 ko                                                   |
+| 422  | Données invalides, avec le détail : `{"detail": "Données invalides", "errors": [{"field": "name", "message": "..."}]}` |
+| 500  | Erreur inattendue (le détail est uniquement dans les logs)                |
+| 502  | Le generator ou le modèle a renvoyé une réponse invalide                  |
+| 503  | Le generator est injoignable                                              |
+| 504  | La génération a dépassé `GENERATOR_TIMEOUT_MS`                            |
+
+### Export Anki
+
+`GET /decks/:id/export` renvoie un fichier `deckgen-<id>-<nom-simplifié>.txt` (UTF-8) :
+
+```text
+#separator:Pipe
+#html:false
+#deck:Docker
+Qu'est-ce qu'un conteneur ?|Un processus isolé du reste du système.
+```
+
+Dans Anki : **Fichier > Importer**, choisir le fichier. Les en-têtes `#` indiquent à Anki le
+séparateur, l'absence de HTML et le deck de destination. Dans chaque champ, `|` est remplacé par
+`/` et les retours à la ligne par des espaces.
+
+Exemple en PowerShell :
+
+```powershell
+Invoke-WebRequest http://localhost:3000/decks/1/export -OutFile deck.txt
+```
 
 ## Variables d'environnement
 
@@ -44,6 +97,8 @@ l'environnement est prioritaire sur le fichier. En conteneur, il n'y a pas de fi
 | `POSTGRES_PASSWORD` | Oui         |        | Mot de passe PostgreSQL (jamais écrit dans les logs) |
 | `POSTGRES_DB`       | Oui         |        | Nom de la base                               |
 | `LOG_LEVEL`         | Non         | `info` | `fatal`, `error`, `warn`, `info`, `debug`, `trace` ou `silent` |
+| `GENERATOR_URL`     | Oui         |        | URL du service generator : `http://localhost:8000` en local, `http://generator:8000` avec docker-compose |
+| `GENERATOR_TIMEOUT_MS` | Non      | `300000` | Délai maximal d'une génération, en millisecondes. Plus long que celui du generator (2 tentatives de 120 s) |
 
 Si une variable obligatoire manque ou est invalide, le service refuse de démarrer et liste les
 variables en cause. Les variables sont séparées (pas de `DATABASE_URL`) pour pouvoir placer
