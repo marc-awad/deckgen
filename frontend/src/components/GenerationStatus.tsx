@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ApiError } from "../api/client";
+import { Spinner } from "./Spinner";
 
 interface GenerationStatusProps {
   isGenerating: boolean;
@@ -42,10 +43,7 @@ function LoadingIndicator() {
 
   return (
     <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4 text-blue-900">
-      <span
-        aria-hidden="true"
-        className="size-5 shrink-0 animate-spin rounded-full border-2 border-blue-300 border-t-blue-700 motion-reduce:animate-none"
-      />
+      <Spinner />
       <div>
         <p className="font-medium">Génération en cours…</p>
         <p className="text-sm">La génération peut prendre jusqu'à une minute.</p>

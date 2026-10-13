@@ -1,8 +1,9 @@
+import { formatNumber } from "../format";
+import { fieldClass, primaryButton } from "../styles";
 import {
   COUNT_MAX,
   COUNT_MIN,
   type FormValues,
-  formatNumber,
   NAME_MAX,
   TEXT_MAX,
   TEXT_MIN,
@@ -18,10 +19,6 @@ interface GenerateFormProps {
   deckCreated: boolean;
 }
 
-const fieldClass =
-  "mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 shadow-sm " +
-  "disabled:bg-slate-100 disabled:text-slate-500";
-
 export function GenerateForm({
   values,
   onChange,
@@ -35,7 +32,7 @@ export function GenerateForm({
 
   return (
     <form
-      className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+      className="mt-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
       onSubmit={(event) => {
         event.preventDefault();
         if (problems.length === 0) onSubmit();
@@ -43,7 +40,7 @@ export function GenerateForm({
     >
       {/* A disabled fieldset disables every field and button inside it */}
       <fieldset disabled={isGenerating} className="space-y-5">
-        <legend className="text-lg font-semibold">Nouveau deck</legend>
+        <legend className="sr-only">Nouveau deck</legend>
 
         <div>
           <label htmlFor="deck-name" className="block text-sm font-medium">
@@ -113,7 +110,7 @@ export function GenerateForm({
             type="submit"
             disabled={problems.length > 0}
             aria-describedby={problems.length > 0 ? "form-problems" : undefined}
-            className="w-full rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+            className={`${primaryButton} w-full sm:w-auto`}
           >
             {isGenerating ? "Génération en cours…" : "Générer les cartes"}
           </button>

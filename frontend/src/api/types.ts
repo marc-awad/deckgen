@@ -6,6 +6,16 @@ export interface Deck {
   createdAt: string;
 }
 
+// Item of GET /decks
+export interface DeckSummary extends Deck {
+  cardCount: number;
+}
+
+// GET /decks/:id, cards sorted by id
+export interface DeckWithCards extends Deck {
+  cards: Card[];
+}
+
 export interface Card {
   id: number;
   deckId: number;
