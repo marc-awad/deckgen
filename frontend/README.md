@@ -1,16 +1,40 @@
 # frontend
 
-Interface web de deckgen (React, TypeScript, Vite, Tailwind CSS). Elle permet de créer un deck,
-de coller un cours, de choisir le nombre maximum de cartes, de lancer la génération et d'afficher
-les cartes produites.
+Interface web de deckgen (React, TypeScript, Vite, Tailwind CSS, React Router). Elle permet de
+créer un deck à partir d'un cours, de consulter ses decks, de modifier ou supprimer les cartes
+générées et d'exporter un deck pour Anki.
 
 Le frontend ne contient aucune logique métier : il appelle l'api, qui enregistre le deck dans
 PostgreSQL et demande les cartes au service `generator`.
+
+## Pages
+
+| Route         | Page                                                                          |
+|---------------|-------------------------------------------------------------------------------|
+| `/`           | Mes decks : liste des decks avec leur nombre de cartes et leur date de création |
+| `/new`        | Nouveau deck : formulaire (nom, cours, nombre de cartes) et génération, puis redirection vers le deck |
+| `/decks/:id`  | Un deck : ses cartes (modifier, supprimer), export Anki, suppression du deck  |
+| autre adresse | Page introuvable, avec un lien vers la liste                                  |
+
+Le routage est fait dans le navigateur par React Router (`src/App.tsx`) : changer de page ne
+recharge pas le site, seul le contenu change. L'en-tête est commun à toutes les pages.
+
+### Fallback SPA en production
+
+Le site est une application monopage (SPA) : il n'existe qu'un fichier `index.html`, et c'est
+React Router qui affiche la bonne page selon l'adresse. Si l'utilisateur recharge
+`/decks/3` ou ouvre ce lien directement, le navigateur demande `/decks/3` au serveur web.
+Ce fichier n'existe pas : le serveur doit donc renvoyer `index.html` pour toute adresse qui ne
+correspond pas à un fichier (et qui ne commence pas par `/api`), sinon il répond 404.
+
+En développement, le serveur de Vite le fait déjà. En production, nginx devra être configuré
+avec `try_files $uri /index.html;`.
 
 ## Versions de Node
 
 Vite 8 demande Node `^20.19.0 || >=22.12.0`, ce qui est déclaré dans `engines` de `package.json`.
 Le projet fonctionne donc avec Node 20.19 en local et avec Node 24 pour le build de l'image Docker.
+React Router est en version 7 (`^7.18.4`) : la version 8 exige Node 22.22 ou plus.
 Une fois compilé, le frontend n'est plus qu'un ensemble de fichiers statiques (HTML, CSS, JS) :
 Node n'est pas nécessaire pour le servir.
 
@@ -79,14 +103,29 @@ Puis ouvrir http://localhost:5173. Pour vérifier le proxy :
 ```text
 src/
   api/
-    types.ts        # types Deck, Card, FieldError, conformes aux réponses de l'api
-    client.ts       # fetch vers /api, classe ApiError, une fonction par route
+    types.ts        # types conformes aux réponses de l'api (Deck, DeckSummary, DeckWithCards, Card)
+    client.ts       # fetch vers /api, classe ApiError, une fonction par route, exportUrl
+  pages/
+    DeckListPage.tsx      # /           liste des decks
+    NewDeckPage.tsx       # /new        création et génération
+    DeckPage.tsx          # /decks/:id  vue d'un deck
+    NotFoundPage.tsx      # *           page introuvable
   components/
-    GenerateForm.tsx      # formulaire (nom, cours, nombre de cartes)
-    GenerationStatus.tsx  # chargement avec compteur, erreurs et bouton Réessayer
-    CardList.tsx          # affichage des cartes générées
+    Layout.tsx            # en-tête, navigation, focus sur le titre à chaque page
+    PageTitle.tsx         # titre h1 de la page et titre de l'onglet
+    LoadStatus.tsx        # chargement ou erreur avec bouton Réessayer
+    Spinner.tsx           # indicateur de chargement
+    GenerateForm.tsx      # formulaire de création (nom, cours, nombre de cartes)
+    GenerationStatus.tsx  # suivi de la génération, erreurs, Réessayer
+    CardList.tsx          # liste des cartes d'un deck
+    CardItem.tsx          # une carte : affichage, boutons Modifier et Supprimer
+    CardEditForm.tsx      # formulaire de modification d'une carte
+  hooks/
+    useLoad.ts      # chargement d'une donnée de l'api (chargement, erreur, réessayer)
   validation.ts     # règles de validation, identiques à celles de l'api
-  App.tsx           # état de la page et enchaînement création puis génération
+  format.ts         # nombres, dates et « 1 carte / 2 cartes » en français
+  styles.ts         # classes Tailwind partagées (boutons, champs)
+  App.tsx           # déclaration des routes
   main.tsx          # point d'entrée React
   index.css         # Tailwind et style du focus clavier
 ```
