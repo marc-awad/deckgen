@@ -20,13 +20,15 @@ flowchart LR
         svcA --> podA[Pods api ×2 à 5<br/>Node.js, uid 1000<br/>initContainer wait-for-postgres]
         hpa{{HPA api<br/>CPU 70 %}} -. replicas .-> podA
         podA -- "postgres:5432" --> svcP[Service postgres<br/>ClusterIP 5432]
-        svcP --> podP[(Pod postgres ×1<br/>emptyDir)]
+        svcP --> podP[Pod postgres ×1]
+        podP --> pvc[(PVC postgres-data)]
         podA -- "generator:8000" --> svcG[Service generator<br/>ClusterIP 8000]
         svcG --> podG[Pods generator ×2<br/>FastAPI, uid 10001]
         secret[/Secret<br/>postgres-credentials/] -. secretKeyRef .-> podP
         secret -. secretKeyRef .-> podA
     end
 
+    pvc -- "lié (volumeName)" --> pv[(PV deckgen-postgres<br/>1 Gi, Retain<br/>hostPath /var/lib/deckgen/postgres)]
     podG -- "host.docker.internal:11434" --> ollama[Ollama sur Windows<br/>GPU]
 ```
 
@@ -42,6 +44,8 @@ Chaque pod est créé par un Deployment (via un ReplicaSet), non représenté su
 | **Service**    | Adresse stable (IP virtuelle et nom DNS) devant les pods qui portent un label donné. Les autres pods utilisent le Service, jamais l'IP d'un pod |
 | **Secret**     | Identifiants PostgreSQL, créés par `kubectl create secret` et injectés dans les pods postgres et api |
 | **HorizontalPodAutoscaler** | Ajuste le nombre de pods de l'api (2 à 5) selon leur consommation CPU mesurée par metrics-server |
+| **PersistentVolume** | Un espace de stockage réel du cluster (ici, un dossier du node). Ressource du cluster, sans namespace |
+| **PersistentVolumeClaim** | La demande de stockage d'une application (« 1 Gi en lecture-écriture »), liée à un PersistentVolume. Le pod utilise la claim, sans connaître le stockage réel |
 
 Les Services ClusterIP (`postgres`, `generator`, `api`) ne sont joignables que depuis le cluster.
 Seul le frontend est exposé à l'extérieur, en NodePort.
@@ -73,7 +77,8 @@ chiffrées : un Secret versionné exposerait le mot de passe. Il est donc créé
 **`Recreate` pour PostgreSQL.** La stratégie par défaut, `RollingUpdate`, démarre le nouveau pod
 avant d'arrêter l'ancien : pendant quelques secondes, deux PostgreSQL utiliseraient les mêmes
 fichiers, ce qui corrompt une base. `Recreate` arrête l'ancien pod avant de créer le nouveau, au
-prix d'une courte interruption. Ce sera indispensable avec le volume persistant de l'issue 16.
+prix d'une courte interruption. C'est indispensable avec le volume persistant (voir
+« Persistance des données »).
 
 **NodePort plutôt que LoadBalancer.** Un Service LoadBalancer demande une adresse à un
 équilibreur de charge externe, normalement fourni par un cloud. Docker Desktop en simule un sur
@@ -307,14 +312,118 @@ Deux détails de ces tests :
 - `kill -STOP 1` lancé **dans** le conteneur est ignoré : le noyau ne délivre pas SIGSTOP au
   PID 1 d'un namespace depuis ce namespace (mesuré : code 0, processus toujours actif). Le signal
   a donc été envoyé depuis l'extérieur, par Docker, moteur du cluster Docker Desktop.
-- Après le test PostgreSQL à 0, la nouvelle base était vide (`emptyDir`) : l'api a répondu 500
-  jusqu'à `kubectl rollout restart deployment api`, qui réapplique les migrations.
+- Après le test PostgreSQL à 0, la nouvelle base était vide (stockage `emptyDir` à l'époque) :
+  l'api a répondu 500 jusqu'à `kubectl rollout restart deployment api`, qui réapplique les
+  migrations. Corrigé depuis par le volume persistant (section suivante).
+
+## Persistance des données
+
+Avant, PostgreSQL écrivait dans un `emptyDir`, un dossier créé avec le pod et supprimé avec lui :
+chaque recréation du pod repartait d'une base vide, et l'api répondait 500 (tables absentes)
+jusqu'à son redémarrage. Ses données sont maintenant sur un **PersistentVolume**
+([deploy/postgres-storage.yaml](../deploy/postgres-storage.yaml)).
+
+### PersistentVolume, PersistentVolumeClaim et liaison
+
+Kubernetes sépare deux rôles :
+
+- le **PersistentVolume** (PV) `deckgen-postgres` décrit un stockage réel : 1 Gi, un dossier du
+  node (`hostPath` `/var/lib/deckgen/postgres`, créé s'il n'existe pas grâce à
+  `DirectoryOrCreate`). C'est une ressource du **cluster**, sans namespace, comme un disque que
+  l'administrateur met à disposition ;
+- la **PersistentVolumeClaim** (PVC) `postgres-data`, dans le namespace `deckgen`, exprime le
+  besoin de l'application : 1 Gi en `ReadWriteOnce`. Le pod postgres monte la claim, sans savoir
+  où sont les données.
+
+La **liaison** (binding) associe une claim à un PV compatible (taille, mode d'accès, classe). Elle
+est exclusive : un PV lié à une claim n'est donné à aucune autre. Ici, elle est explicite : la claim
+désigne son volume (`volumeName: deckgen-postgres`), et les deux portent la même
+`storageClassName: deckgen-manual`. Cette classe ne correspond à aucune StorageClass réelle : elle
+empêche une autre claim de prendre ce PV, et empêche la StorageClass par défaut de Docker Desktop
+(`hostpath`) de créer un autre volume pour notre claim.
+
+Le dossier est sous `/var/lib` : sur le node Docker Desktop, c'est le seul dossier stocké sur le
+disque virtuel persistant (`/dev/sdd`, fichier `docker_data.vhdx` côté Windows). Le reste du
+système de fichiers du node est en mémoire et disparaît à chaque redémarrage de Docker Desktop :
+un PV dans `/data/deckgen` aurait semblé fonctionner, puis tout perdu.
+
+### ReadWriteOnce et `Recreate`
+
+`ReadWriteOnce` signifie : monté en lecture-écriture par **un seul node** à la fois. Avec la
+stratégie `RollingUpdate`, le nouveau pod postgres démarre avant l'arrêt de l'ancien :
+
+- sur un cluster de plusieurs nodes, s'il est placé sur un autre node, il ne peut pas monter le
+  volume et reste bloqué, pendant que l'ancien pod attend un remplaçant prêt : la mise à jour ne
+  se termine jamais ;
+- sur notre node unique, `ReadWriteOnce` n'empêche pas deux pods de monter le volume en même
+  temps : deux PostgreSQL écriraient dans les mêmes fichiers et corrompraient la base.
+
+`Recreate` arrête l'ancien pod avant de créer le nouveau : un seul PostgreSQL à la fois sur ces
+données. Le mode `ReadWriteOncePod` (un seul **pod**) ajouterait cette garantie au niveau du
+volume, mais la consigne demande `ReadWriteOnce`.
+
+### Retain contre Delete
+
+La politique de récupération (`persistentVolumeReclaimPolicy`) décide du sort du PV quand sa claim
+est supprimée :
+
+| Politique | Quand la claim est supprimée                                       | Usage                     |
+|-----------|--------------------------------------------------------------------|---------------------------|
+| `Delete`  | le volume et ses données sont supprimés                            | défaut des StorageClass, données jetables |
+| `Retain`  | le PV et ses données restent, à l'état `Released`                  | données à protéger (choix ici) |
+
+Un PV `Released` ne se relie pas tout seul à une nouvelle claim : il garde dans `spec.claimRef`
+l'identifiant (uid) de l'ancienne. Kubernetes ne donne pas d'office les données d'une claim
+supprimée à une autre : l'administrateur décide, en retirant le `claimRef` (procédure dans
+[deploy/README.md](../deploy/README.md)).
+
+### Provisionnement statique contre dynamique
+
+- **Statique** (choix du projet, exigé par la consigne) : l'administrateur crée le PV à la main,
+  puis l'application le réclame. Simple à comprendre, mais il faut un PV par besoin, et
+  `hostPath` lie les données à un node précis.
+- **Dynamique** (ce qu'on ferait en production) : la claim désigne une **StorageClass**, et son
+  provisionneur crée automatiquement un volume de la bonne taille (disque cloud EBS, Azure Disk,
+  Ceph...), indépendant des nodes : un pod déplacé retrouve son volume. Docker Desktop en fournit
+  une (`hostpath`, politique `Delete`).
+
+### StatefulSet pour une vraie base
+
+Un StatefulSet avec `volumeClaimTemplates` créerait automatiquement une claim par pod
+(`data-postgres-0`), garderait le lien entre un pod et son volume, et garantirait qu'un pod n'est
+jamais lancé en double. Pour une base répliquée (plusieurs instances), c'est indispensable : chaque
+instance a son identité et ses données. Pour une instance unique, le Deployment à 1 réplica avec
+`Recreate` et une claim explicite donne le même résultat ici. Voir aussi
+« Deployment plutôt que StatefulSet » plus haut.
+
+### Résultats des tests de persistance
+
+| Test | Résultat |
+|------|----------|
+| `kubectl apply -f deploy/` | PV `deckgen-postgres` et PVC `postgres-data` créés, PVC **Bound** sur le PV, pod postgres monté sur `postgres-data` |
+| Suppression du pod postgres | Pod recréé ; log « Database directory appears to contain a database; Skipping initialization » ; deck et ses 5 cartes intacts ; `/api/decks` en 200 **sans redémarrer l'api** (RESTARTS 0 inchangé) |
+| `kubectl delete namespace deckgen` | PV toujours présent, état **Released**, `claimRef` sur l'uid de l'ancienne claim ; données sur le node (62,9 Mo dans `/var/lib/deckgen/postgres/18/docker`) |
+| Redéploiement sans action sur le PV | Nouvelle PVC **Pending** (« volume "deckgen-postgres" already bound to a different claim »), pod postgres `Pending` |
+| Retrait du `claimRef` | PV `Available`, puis **Bound** sur la nouvelle claim ; PostgreSQL retrouve la base, l'api s'y connecte (Secret recréé avec les mêmes identifiants) ; le deck d'avant est là, date de création d'origine |
+| Génération de bout en bout | 201, 10 cartes (cours Java) en 18 s, export OK |
+
+Une seule fois, au passage de `emptyDir` au volume, la base était neuve : l'api a été relancée pour
+créer les tables. Le premier appel de génération après un redémarrage du PC a pris plus de 120 s
+(chargement du modèle par Ollama, mis à jour automatiquement de 0.40.3 à 0.40.4) : 504, puis 5,6 s
+pour l'appel suivant.
+
+**Piège du Secret.** PostgreSQL ne lit `POSTGRES_PASSWORD` qu'à l'initialisation d'un dossier vide.
+Une fois les données persistantes, un Secret recréé avec un nouveau mot de passe ne change pas
+celui de la base : l'api serait refusée. Il faut recréer le Secret avec les mêmes identifiants
+(gardés avant la suppression du namespace), ou redéfinir le mot de passe dans la base
+(`ALTER USER`, par une connexion locale au pod, sans mot de passe). Procédures dans
+[deploy/README.md](../deploy/README.md).
 
 ## Limites provisoires
 
 | Limite                     | Conséquence                                                   | Correction  |
 |----------------------------|---------------------------------------------------------------|-------------|
-| `emptyDir` pour PostgreSQL | Les données disparaissent quand le pod est supprimé ou recréé (y compris par `Recreate` après une modification). La nouvelle base est vide : l'api répond 500 jusqu'à son redémarrage, qui réapplique les migrations | PVC, issue 16 |
+| PV `hostPath` statique     | Les données sont dans un dossier d'un node précis : sur plusieurs nodes, un pod déplacé ne les retrouverait pas. Elles dépendent du disque de Docker Desktop (perdues par une réinitialisation), sans sauvegarde | StorageClass dynamique et sauvegardes `pg_dump` (production) |
 | Configuration en dur       | `OLLAMA_URL`, `OLLAMA_MODEL`, `DB_HOST`... sont dans les Deployments | ConfigMap, issue 15 |
 | NodePort                   | Port non standard, un port par service exposé                | Ingress, issue 17 |
 | Un seul node               | Les réplicas protègent d'une panne de pod, pas d'une panne de machine : tous les pods sont sur le même node | Cluster multi-node (hors projet) |

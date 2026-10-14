@@ -12,7 +12,8 @@ metadata:
 spec:
   # A single instance: PostgreSQL does not share its data folder between processes
   replicas: 1
-  # The old pod is stopped before the new one starts: two pods must never write the same data
+  # The old pod is stopped before the new one starts: two PostgreSQL must never write the same
+  # files, and a ReadWriteOnce volume cannot be shared by pods on different nodes
   strategy:
     type: Recreate
   selector:
@@ -82,10 +83,10 @@ spec:
             - name: data
               mountPath: /var/lib/postgresql
       volumes:
-        # Temporary: an emptyDir is deleted with the pod, and the data with it.
-        # Replaced by a PersistentVolumeClaim at issue 16.
+        # Persistent storage (postgres-storage.yaml): the data survives the pod
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: postgres-data
 ---
 apiVersion: v1
 kind: Service
