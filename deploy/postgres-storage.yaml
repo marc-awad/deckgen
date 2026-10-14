@@ -1,0 +1,47 @@
+# Storage of PostgreSQL: a PersistentVolume (cluster resource, no namespace) and the
+# PersistentVolumeClaim of the postgres Deployment. Sorted before postgres.yaml by
+# "kubectl apply -f deploy/" ("-" comes before "."), so the claim exists before the pod.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  # No namespace: a PersistentVolume belongs to the whole cluster, hence the deckgen- prefix
+  name: deckgen-postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: deckgen
+spec:
+  capacity:
+    storage: 1Gi
+  # Mounted read-write by a single node at a time
+  accessModes:
+    - ReadWriteOnce
+  # Deleting the claim keeps the volume and its data (Delete would erase them)
+  persistentVolumeReclaimPolicy: Retain
+  # Dedicated class: only a claim asking for it can use this volume, and the default
+  # StorageClass of Docker Desktop (hostpath) does not create another volume for our claim
+  storageClassName: deckgen-manual
+  # Folder on the node. On Docker Desktop only /var/lib is on the persistent virtual disk:
+  # the rest of the node file system is lost when Docker Desktop restarts
+  hostPath:
+    path: /var/lib/deckgen/postgres
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: deckgen
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: deckgen-manual
+  # Bound to this PersistentVolume and no other
+  volumeName: deckgen-postgres
+  resources:
+    requests:
+      storage: 1Gi
