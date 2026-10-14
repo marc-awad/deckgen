@@ -9,9 +9,10 @@ persistant de PostgreSQL. Explications détaillées : [docs/kubernetes.md](../do
 | `00-namespace.yaml`          | Namespace `deckgen` (préfixe `00-` : appliqué en premier)        |
 | `postgres-storage.yaml`      | PersistentVolume `deckgen-postgres` (1 Gi, ressource du cluster, sans namespace) et PersistentVolumeClaim `postgres-data` |
 | `postgres.yaml`              | Deployment (1 pod, stratégie `Recreate`, volume `postgres-data`) et Service ClusterIP `postgres:5432` |
-| `generator.yaml`             | Deployment (2 pods) et Service ClusterIP `generator:8000`       |
-| `api.yaml`                   | Deployment (2 à 5 pods), Service ClusterIP `api:3000` et HPA    |
-| `frontend.yaml`              | Deployment (2 pods) et Service NodePort `30080`                 |
+| `generator.yaml`             | ConfigMap `generator-config`, Deployment (2 pods) et Service ClusterIP `generator:8000` |
+| `api.yaml`                   | ConfigMap `api-config`, Deployment (2 à 5 pods), Service ClusterIP `api:3000` et HPA |
+| `frontend.yaml`              | ConfigMap `frontend-config`, Deployment (2 pods) et Service NodePort `30080` |
+| `postgres-credentials.yaml.example` | Modèle du Secret, valeurs factices, **jamais appliqué** (extension `.example`) |
 | `cluster/metrics-server.yaml`| metrics-server v0.9.0, composant du cluster (installé une fois) |
 
 ## Prérequis
@@ -104,6 +105,29 @@ Pour fixer soi-même le mot de passe, remplacer `$password` par la valeur voulue
 (`--from-literal=POSTGRES_PASSWORD=<mot-de-passe>`). Vérification sans afficher les valeurs :
 `kubectl describe secret postgres-credentials -n deckgen`.
 
+#### Modèle du Secret
+
+`postgres-credentials.yaml.example` montre la forme du Secret (trois clés, valeurs factices). Son
+extension `.example` l'exclut de `kubectl apply -f deploy/`, qui ne lit que les fichiers `.yaml`,
+`.yml` et `.json` (vérifié : aucun Secret dans le dry-run). Un nom comme
+`postgres-credentials.example.yaml` serait, lui, appliqué, et remplacerait le vrai mot de passe
+par `change-me`.
+
+Pour créer le Secret à partir d'un fichier plutôt que de la commande ci-dessus :
+
+```powershell
+Copy-Item deploy\postgres-credentials.yaml.example postgres-credentials.local.yaml
+# Remplacer les valeurs factices dans postgres-credentials.local.yaml, puis :
+kubectl create -f postgres-credentials.local.yaml
+Remove-Item postgres-credentials.local.yaml
+```
+
+- Le fichier est à la racine du dépôt, hors de `deploy/` : `kubectl apply -f deploy/` ne le lit
+  pas. Le motif `*.local.yaml` du `.gitignore` l'exclut de Git.
+- `kubectl create` et non `apply` : `apply` recopie tout le fichier, mot de passe compris **en
+  clair**, dans l'annotation `kubectl.kubernetes.io/last-applied-configuration` du Secret
+  (vérifié en dry-run). `create` n'ajoute aucune annotation.
+
 #### Quand une base existe déjà : les mêmes identifiants
 
 PostgreSQL ne lit `POSTGRES_USER`, `POSTGRES_PASSWORD` et `POSTGRES_DB` qu'au **premier**
@@ -170,6 +194,8 @@ kubectl logs -n deckgen deploy/api -c api   # logs de l'api (un pod au hasard)
 kubectl logs -n deckgen <pod-api> -c wait-for-postgres   # attente de PostgreSQL au démarrage
 kubectl describe pod -n deckgen <pod>       # événements : probes en échec, redémarrages
 kubectl get pods -n deckgen -o custom-columns=POD:.metadata.name,QOS:.status.qosClass
+kubectl get configmap -n deckgen            # api-config, frontend-config, generator-config
+kubectl describe pod -n deckgen <pod>       # "Environment Variables from" : références, pas de valeurs
 ```
 
 Puis ouvrir **http://localhost:30080**.
@@ -195,6 +221,50 @@ Docker Desktop (vérifié). En revanche :
   suppriment `docker_data.vhdx`, donc les données à coup sûr.
 
 Une vraie sauvegarde passe par `pg_dump` (copie logique de la base, hors du cluster).
+
+## Configuration
+
+La configuration non sensible est dans un ConfigMap par service, en tête du fichier du service.
+Chaque clé devient une variable d'environnement du conteneur (`envFrom`). Le mot de passe n'est
+dans aucun ConfigMap : il est dans le Secret `postgres-credentials`.
+
+| ConfigMap          | Clé                                         | Valeur                                  |
+|--------------------|---------------------------------------------|-----------------------------------------|
+| `generator-config` | `OLLAMA_URL`                                | `http://host.docker.internal:11434`     |
+|                    | `OLLAMA_MODEL`                              | `gemma3:4b`                             |
+|                    | `OLLAMA_TIMEOUT`                            | `120` (secondes, par appel à Ollama)    |
+|                    | `OLLAMA_NUM_CTX`                            | `12288` (tokens)                        |
+| `api-config`       | `DB_HOST`                                   | `postgres`                              |
+|                    | `DB_PORT`                                   | `5432`                                  |
+|                    | `GENERATOR_URL`                             | `http://generator:8000`                 |
+|                    | `GENERATOR_TIMEOUT_MS`                      | `300000`                                |
+|                    | `LOG_LEVEL`                                 | `info`                                  |
+| `frontend-config`  | `API_UPSTREAM`                              | `api.deckgen.svc.cluster.local:3000`    |
+|                    | `NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE`| `1`                                     |
+
+`api-config` sert aussi à l'initContainer `wait-for-postgres` (`DB_HOST`, `DB_PORT`).
+
+| Secret                 | Clés                                          | Lu par          |
+|------------------------|-----------------------------------------------|-----------------|
+| `postgres-credentials` | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | postgres, api |
+
+### Changer une configuration
+
+Les variables d'environnement sont lues **au démarrage** du conteneur : modifier un ConfigMap ne
+change rien aux pods en cours. Il faut les recréer :
+
+```powershell
+# 1. Modifier la valeur dans le fichier (ex. OLLAMA_MODEL dans deploy/generator.yaml), puis :
+kubectl apply -f deploy/generator.yaml        # configmap configured, deployment unchanged
+# 2. Recréer les pods (rolling update, sans interruption) pour qu'ils lisent la nouvelle valeur
+kubectl rollout restart deployment/generator -n deckgen
+kubectl rollout status deployment/generator -n deckgen
+# 3. Vérifier
+kubectl exec -n deckgen deploy/generator -- printenv OLLAMA_MODEL
+```
+
+Pour le Secret, même principe : le recréer (voir étape 1, avec les mêmes identifiants si une base
+existe), puis `kubectl rollout restart deployment/api deployment/postgres -n deckgen`.
 
 ## Mettre à jour et revenir en arrière
 

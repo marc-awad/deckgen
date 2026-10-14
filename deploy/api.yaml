@@ -1,5 +1,25 @@
 # REST API: decks and cards in PostgreSQL, calls the generator.
 # Reachable inside the cluster as api:3000. Number of pods managed by the HPA below (2 to 5).
+# Non-sensitive configuration, read by api/src/config.ts at startup; the database
+# credentials come from the Secret postgres-credentials (see README.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+data:
+  # Names of the Services, resolved by the cluster DNS
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  GENERATOR_URL: http://generator:8000
+  # Longer than the generator's own limit (2 attempts of 120 s)
+  GENERATOR_TIMEOUT_MS: "300000"
+  LOG_LEVEL: info
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -48,10 +68,14 @@ spec:
         - name: wait-for-postgres
           image: postgres:18.6-alpine3.24
           imagePullPolicy: IfNotPresent
+          # Same database address as the api, read from its ConfigMap
+          envFrom:
+            - configMapRef:
+                name: api-config
           command:
             - sh
             - -c
-            - until pg_isready -h postgres -p 5432; do echo "waiting for postgres"; sleep 2; done
+            - until pg_isready -h "$DB_HOST" -p "$DB_PORT"; do echo "waiting for postgres"; sleep 2; done
           resources:
             requests:
               cpu: 10m
@@ -73,27 +97,13 @@ spec:
           ports:
             - name: http
               containerPort: 3000
-          env:
-            # Names of the Services, resolved by the cluster DNS
-            - name: DB_HOST
-              value: postgres
-            - name: GENERATOR_URL
-              value: http://generator:8000
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: POSTGRES_USER
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: POSTGRES_PASSWORD
-            - name: POSTGRES_DB
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: POSTGRES_DB
+          # Every key becomes an environment variable: the ConfigMap for the settings, the Secret
+          # for POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB (its only three keys)
+          envFrom:
+            - configMapRef:
+                name: api-config
+            - secretRef:
+                name: postgres-credentials
           lifecycle:
             # Keeps serving while the pod is removed from the Service endpoints, then SIGTERM
             preStop:

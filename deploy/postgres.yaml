@@ -37,22 +37,11 @@ spec:
           ports:
             - name: postgres
               containerPort: 5432
-          env:
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: POSTGRES_USER
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: POSTGRES_PASSWORD
-            - name: POSTGRES_DB
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: POSTGRES_DB
+          # POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB, the only three keys of the Secret.
+          # Only read when the data folder is empty (first start): see README.md
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
           # Over TCP (-h 127.0.0.1): during the first start the image runs a temporary server
           # on a Unix socket only, which must not be taken for the real one
           readinessProbe:

@@ -1,5 +1,25 @@
 # Generator: turns a course into flashcards with the Ollama of the Windows host (GPU).
 # Reachable inside the cluster as generator:8000.
+# Non-sensitive configuration, read by generator/app/config.py at startup.
+# Values are strings; a change only applies to new pods (kubectl rollout restart).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: generator-config
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: generator
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+data:
+  # Ollama runs on Windows and uses the GPU directly
+  OLLAMA_URL: http://host.docker.internal:11434
+  OLLAMA_MODEL: gemma3:4b
+  # Seconds allowed for one call to Ollama (the generator makes at most 2 attempts)
+  OLLAMA_TIMEOUT: "120"
+  # Context size of the model, in tokens (prompt + answer)
+  OLLAMA_NUM_CTX: "12288"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,13 +70,10 @@ spec:
           ports:
             - name: http
               containerPort: 8000
-          # Plain values for now, moved to a ConfigMap at issue 15
-          env:
-            # Ollama runs on Windows and uses the GPU directly
-            - name: OLLAMA_URL
-              value: http://host.docker.internal:11434
-            - name: OLLAMA_MODEL
-              value: gemma3:4b
+          # Every key of the ConfigMap becomes an environment variable of the same name
+          envFrom:
+            - configMapRef:
+                name: generator-config
           lifecycle:
             # Keeps serving while the pod is removed from the Service endpoints, then SIGTERM
             preStop:
