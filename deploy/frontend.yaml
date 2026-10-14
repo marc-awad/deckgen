@@ -1,5 +1,5 @@
 # Frontend: nginx serves the React app and forwards /api/ to the api.
-# Reachable from the machine at http://localhost:30080 (NodePort).
+# Reachable from the machine through the Ingress (deploy/ingress.yaml): http://deckgen.local
 # Configuration read by the entrypoint of the nginx image at startup
 apiVersion: v1
 kind: ConfigMap
@@ -116,17 +116,22 @@ metadata:
     app.kubernetes.io/name: frontend
     app.kubernetes.io/component: frontend
     app.kubernetes.io/part-of: deckgen
+  annotations:
+    # Traefik sends the requests straight to the pods (not through the Service IP), so a
+    # sessionAffinity of the Service would not apply. Sticky cookie instead: all requests of a
+    # browser go to the same pod, so during a rolling update index.html and the hashed assets it
+    # references come from the same version (otherwise: 404 on the JS file)
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.name: deckgen_frontend
+    # Not readable by JavaScript, only sent to this site; no "secure" flag: the site is in HTTP
+    traefik.ingress.kubernetes.io/service.sticky.cookie.httponly: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.samesite: lax
 spec:
-  # Opens port 30080 on the node, which Docker Desktop forwards to localhost.
-  # Will be replaced by an Ingress at issue 17.
-  type: NodePort
-  # All requests of a client go to the same pod: during a rolling update, index.html and the
-  # hashed assets it references come from the same version (otherwise: 404 on the JS file)
-  sessionAffinity: ClientIP
+  # Internal address only: the Ingress (deploy/ingress.yaml) is the single entry point
+  type: ClusterIP
   selector:
     app.kubernetes.io/name: frontend
   ports:
     - name: http
       port: 8080
       targetPort: http
-      nodePort: 30080

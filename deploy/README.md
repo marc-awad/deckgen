@@ -1,8 +1,10 @@
 # Déploiement Kubernetes
 
 Ce dossier contient les manifestes Kubernetes de deckgen : un Deployment et un Service par
-service, dans le namespace `deckgen`, un HorizontalPodAutoscaler pour l'api, et le stockage
-persistant de PostgreSQL. Explications détaillées : [docs/kubernetes.md](../docs/kubernetes.md).
+service, dans le namespace `deckgen`, un HorizontalPodAutoscaler pour l'api, le stockage
+persistant de PostgreSQL et un Ingress (Traefik), seul point d'entrée de l'application :
+**http://deckgen.local** (après modification du fichier hosts) ou **http://deckgen.localhost**.
+Explications détaillées : [docs/kubernetes.md](../docs/kubernetes.md).
 
 | Fichier                      | Contenu                                                         |
 |------------------------------|-----------------------------------------------------------------|
@@ -11,9 +13,11 @@ persistant de PostgreSQL. Explications détaillées : [docs/kubernetes.md](../do
 | `postgres.yaml`              | Deployment (1 pod, stratégie `Recreate`, volume `postgres-data`) et Service ClusterIP `postgres:5432` |
 | `generator.yaml`             | ConfigMap `generator-config`, Deployment (2 pods) et Service ClusterIP `generator:8000` |
 | `api.yaml`                   | ConfigMap `api-config`, Deployment (2 à 5 pods), Service ClusterIP `api:3000` et HPA |
-| `frontend.yaml`              | ConfigMap `frontend-config`, Deployment (2 pods) et Service NodePort `30080` |
+| `frontend.yaml`              | ConfigMap `frontend-config`, Deployment (2 pods) et Service ClusterIP `frontend:8080` (cookie d'affinité pour Traefik) |
+| `ingress.yaml`               | Middlewares Traefik (`api-strip-prefix`, `api-security-headers`) et Ingress `frontend` et `api` (`deckgen.local`, `deckgen.localhost`) |
 | `postgres-credentials.yaml.example` | Modèle du Secret, valeurs factices, **jamais appliqué** (extension `.example`) |
 | `cluster/metrics-server.yaml`| metrics-server v0.9.0, composant du cluster (installé une fois) |
+| `cluster/traefik-values.yaml`| Valeurs du chart Helm de Traefik (contrôleur Ingress, installé une fois) |
 
 ## Prérequis
 
@@ -21,6 +25,10 @@ persistant de PostgreSQL. Explications détaillées : [docs/kubernetes.md](../do
   Docker Desktop > Settings > Kubernetes > Enable Kubernetes > Kubeadm > Apply.
 - **Ollama lancé sur Windows** avec le modèle `gemma3:4b` (`ollama pull gemma3:4b`). Le generator
   l'appelle sur `http://host.docker.internal:11434` : Ollama utilise ainsi directement le GPU.
+- **Helm** (installation de Traefik) : `winget install --id Helm.Helm --exact`, puis ouvrir un
+  nouveau terminal (le `PATH` est modifié). Vérification : `helm version` (v4.3.0 ici).
+- **Port 80 libre** sur Windows (Traefik y est publié) :
+  `Get-NetTCPConnection -LocalPort 80 -State Listen` ne doit rien afficher.
 - Contexte kubectl sur le cluster local, à vérifier avant toute commande :
 
 ```powershell
@@ -71,14 +79,43 @@ contient pas l'adresse IP du node, metrics-server ne peut donc pas le vérifier 
 validate certificate for 192.168.65.3 because it doesn't contain any IP SANs »). Cette option est
 réservée à un cluster local.
 
+## Traefik, contrôleur Ingress (une seule fois par cluster)
+
+L'Ingress de `deploy/ingress.yaml` ne fait rien seul : il faut un **contrôleur** qui lit les
+Ingress et route le trafic. C'est Traefik, installé avec son chart Helm officiel dans le namespace
+`traefik` (ingress-nginx, l'autre contrôleur courant, n'est plus maintenu depuis mars 2026).
+
+```powershell
+helm repo add traefik https://traefik.github.io/charts
+helm repo update traefik
+helm upgrade --install traefik traefik/traefik --version 41.7.1 `
+  --namespace traefik --create-namespace -f deploy/cluster/traefik-values.yaml --wait
+kubectl get pods -n traefik          # traefik-... Running, 1/1
+kubectl get svc -n traefik           # LoadBalancer, EXTERNAL-IP localhost, port 80
+kubectl get ingressclass             # traefik
+```
+
+- Chart **41.7.1**, Traefik **v3.7.14** (versions fixées dans la commande et dans les valeurs).
+- `upgrade --install` sert aussi à modifier la configuration : relancer la même commande après
+  avoir changé `traefik-values.yaml`. Attendre que l'ancien pod Traefik ait disparu
+  (`kubectl get pods -n traefik`) avant de tester : pendant son arrêt, il peut encore servir des
+  requêtes avec son ancienne configuration.
+- Tableau de bord, non exposé : `kubectl port-forward -n traefik deployment/traefik 9000:8080`,
+  puis http://localhost:9000/dashboard/.
+- Retirer Traefik : `helm uninstall traefik -n traefik` (les CRD de Traefik restent installées).
+
 ## Déployer
 
 Ordre d'installation sur un cluster neuf :
 
 1. metrics-server (section précédente, une seule fois par cluster) ;
-2. les images (section « Images locales ») ;
-3. le namespace et le Secret (étape 1 ci-dessous) ;
-4. `kubectl apply -f deploy/` (étape 2), qui crée aussi le PersistentVolume et sa claim.
+2. Traefik (section précédente) : **avant** `kubectl apply -f deploy/`, car `ingress.yaml`
+   contient des `Middleware`, des ressources définies par les CRD de Traefik. Sans elles,
+   l'apply échoue sur ce fichier (« no matches for kind "Middleware" ») ;
+3. les images (section « Images locales ») ;
+4. le namespace et le Secret (étape 1 ci-dessous) ;
+5. `kubectl apply -f deploy/` (étape 2), qui crée aussi le PersistentVolume, sa claim et l'Ingress ;
+6. le fichier hosts pour `deckgen.local` (section « Accéder à l'application »).
 
 ### 1. Namespace et Secret (avant le premier déploiement)
 
@@ -196,9 +233,54 @@ kubectl describe pod -n deckgen <pod>       # événements : probes en échec, r
 kubectl get pods -n deckgen -o custom-columns=POD:.metadata.name,QOS:.status.qosClass
 kubectl get configmap -n deckgen            # api-config, frontend-config, generator-config
 kubectl describe pod -n deckgen <pod>       # "Environment Variables from" : références, pas de valeurs
+kubectl get pods -n traefik                 # contrôleur Ingress Running
+kubectl get ingressclass                    # traefik
+kubectl get ingress,middleware -n deckgen   # Ingress api et frontend, ADDRESS localhost
 ```
 
-Puis ouvrir **http://localhost:30080**.
+Avec curl.exe, sans fichier hosts (curl résout `*.localhost` lui-même) :
+
+```powershell
+curl.exe http://deckgen.localhost/api/health                       # {"status":"ok"}
+curl.exe http://deckgen.localhost/api/route-inconnue               # 404 de l'api : préfixe /api retiré
+curl.exe -I http://deckgen.localhost/                              # en-têtes de sécurité, cookie deckgen_frontend
+curl.exe --resolve deckgen.local:80:127.0.0.1 http://deckgen.local/api/health   # simule le fichier hosts
+```
+
+## Accéder à l'application
+
+| URL                         | Fonctionne                                                       |
+|-----------------------------|------------------------------------------------------------------|
+| http://deckgen.local        | après l'ajout de la ligne au fichier hosts (ci-dessous)          |
+| http://deckgen.localhost    | tout de suite dans un navigateur et avec curl.exe : ils envoient eux-mêmes `*.localhost` vers 127.0.0.1. Pas avec `Invoke-RestMethod`, Windows ne résolvant pas ce nom |
+
+L'ancien accès par le NodePort (http://localhost:30080) n'existe plus : le Service frontend est en
+ClusterIP, et l'Ingress est le seul point d'entrée.
+
+### Fichier hosts (PowerShell en administrateur)
+
+Clic droit sur PowerShell > « Exécuter en tant qu'administrateur », puis :
+
+```powershell
+$hosts = "$env:SystemRoot\System32\drivers\etc\hosts"
+if (-not (Select-String -Path $hosts -Pattern '^\s*127\.0\.0\.1\s+deckgen\.local\s*$' -Quiet)) {
+  Add-Content -Path $hosts -Value "`r`n127.0.0.1`tdeckgen.local" -Encoding ascii
+}
+ipconfig /flushdns
+Resolve-DnsName deckgen.local -Type A        # 127.0.0.1, lu dans le fichier hosts
+```
+
+Le test `Select-String` évite d'ajouter la ligne deux fois si la commande est relancée. Pour la
+retirer plus tard : supprimer la ligne `127.0.0.1 deckgen.local` du fichier (Bloc-notes lancé en
+administrateur), puis `ipconfig /flushdns`.
+
+`.local` est réservé au **mDNS** (RFC 6762, découverte d'appareils sur le réseau local, comme
+Bonjour ou Avahi). Sur certains systèmes (macOS, Linux avec Avahi), un nom en `.local` est d'abord
+cherché par mDNS, ce qui peut ajouter plusieurs secondes avant de lire le fichier hosts. Deux
+alternatives sans ce défaut : `.localhost` (RFC 6761, toujours la machine locale, résolu par les
+navigateurs sans configuration) et `.test` (RFC 6761, réservé aux tests, jamais utilisé sur
+Internet, mais à déclarer dans le fichier hosts comme `.local`). Le nom `deckgen.local` est gardé
+car demandé, `deckgen.localhost` est déclaré en secours dans le même Ingress.
 
 Les données de PostgreSQL sont sur le node, dans `/var/lib/deckgen/postgres` (le seul dossier du
 node Docker Desktop qui survit à un redémarrage). Pour les voir :
@@ -284,7 +366,7 @@ kubectl rollout undo deployment/frontend -n deckgen --to-revision=<n>
 kubectl rollout status deployment/frontend -n deckgen
 
 kubectl diff -f deploy/frontend.yaml                       # écart entre le fichier et le cluster
-curl.exe http://localhost:30080/version.json               # version servie (0.2.0 et suivantes)
+curl.exe http://deckgen.localhost/version.json             # version servie (0.2.0 et suivantes)
 ```
 
 Après un `rollout undo`, le cluster ne correspond plus au fichier : le prochain
@@ -300,8 +382,9 @@ kubectl delete namespace deckgen
 Cette commande supprime toutes les ressources du namespace, Secret et PersistentVolumeClaim
 compris, mais **pas les données** : le PersistentVolume n'appartient à aucun namespace, et sa
 politique `Retain` le conserve, avec son dossier sur le node. Il passe à l'état `Released`.
-metrics-server, dans `kube-system`, n'est pas concerné non plus
-(`kubectl delete -f deploy/cluster/metrics-server.yaml` pour le retirer).
+metrics-server (`kube-system`) et Traefik (`traefik`) ne sont pas concernés non plus
+(`kubectl delete -f deploy/cluster/metrics-server.yaml` et `helm uninstall traefik -n traefik`
+pour les retirer).
 
 ### Redéployer sur les données existantes (PV `Released`)
 

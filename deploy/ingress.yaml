@@ -1,0 +1,111 @@
+# Single entry point of the application: Traefik (deploy/cluster/traefik-values.yaml), port 80.
+#   http://deckgen.local      (hosts file, see README.md)
+#   http://deckgen.localhost  (fallback: browsers resolve *.localhost to 127.0.0.1 by themselves)
+# Middleware is a Traefik resource (CRD): Traefik must be installed before "kubectl apply -f deploy/".
+
+# Removes /api before forwarding to the api, like nginx does in the frontend: /api/decks -> /decks
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-strip-prefix
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  stripPrefix:
+    prefixes:
+      - /api
+---
+# Security headers of the api responses: this route no longer goes through nginx, which adds
+# them to the frontend responses
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-security-headers
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  headers:
+    # X-Content-Type-Options: nosniff
+    contentTypeNosniff: true
+    # X-Frame-Options: DENY
+    frameDeny: true
+    referrerPolicy: strict-origin-when-cross-origin
+---
+# /api -> Service api, through the two middlewares above.
+# Separate from the frontend Ingress: the middleware annotation applies to every path of an Ingress.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+  annotations:
+    # <namespace>-<name>@kubernetescrd, applied in this order
+    traefik.ingress.kubernetes.io/router.middlewares: deckgen-api-strip-prefix@kubernetescrd,deckgen-api-security-headers@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: deckgen.local
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+    - host: deckgen.localhost
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+---
+# Everything else -> Service frontend (nginx serves the React app, its own security headers and
+# the SPA fallback). /api is longer, so Traefik tries it first.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: deckgen.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  name: http
+    - host: deckgen.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  name: http
