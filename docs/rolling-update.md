@@ -28,7 +28,7 @@ Chaque ReplicaSet est une **révision**, listée par `kubectl rollout history` a
 | `kubernetes.io/change-cause` | texte | Description de la version, affichée par `kubectl rollout history` |
 | `preStop` | `sleep 5` | Voir « Arrêt d'un pod sans erreur » |
 | `terminationGracePeriodSeconds` | `20` | 5 s de preStop + arrêt propre de l'application (10 s au plus pour l'api) + marge. Au-delà, le kubelet envoie SIGKILL |
-| Service frontend : `sessionAffinity` | `ClientIP` | Voir « Mélange de versions et assets » |
+| Service frontend : affinité | cookie sticky de Traefik (`ClientIP` jusqu'à l'issue 17) | Voir « Mélange de versions et assets » |
 
 La **readinessProbe** est la pièce centrale : un nouveau pod ne reçoit du trafic, et un ancien
 n'est arrêté, qu'une fois la readiness du nouveau réussie. Sans elle, Kubernetes arrêterait les
@@ -83,6 +83,12 @@ Limites de cette solution :
   pod frontend reçoit tout le trafic, la répartition de charge disparaît ;
 - derrière un Ingress (issue 17), le Service ne voit que l'adresse du contrôleur d'Ingress :
   l'affinité se règle alors dans l'Ingress (cookie) ;
+- **depuis l'issue 17**, c'est le cas : Traefik envoie les requêtes directement aux pods, sans
+  passer par l'IP du Service, donc `sessionAffinity` n'aurait plus d'effet. Le Service frontend est
+  en ClusterIP sans `sessionAffinity`, et Traefik pose un cookie `deckgen_frontend` qui fixe le pod
+  d'un navigateur. Mesuré à travers l'Ingress pendant deux changements de version : **0 visite
+  sur 379** en 404 avec le cookie, **157 sur 378** sans (détails dans
+  [kubernetes.md](kubernetes.md#affinité-par-cookie)) ;
 - la solution complète est de garder les assets des versions précédentes disponibles (stockage
   externe ou CDN, ou copie des anciens assets dans la nouvelle image) : le mélange de versions
   ne provoque alors plus aucun 404.
@@ -135,12 +141,15 @@ kube-proxy lui envoie pendant la mise à jour des règles réseau. C'est le rôl
 
 État de départ : le cluster tourne en 0.1.0, `deploy/frontend.yaml` pointe vers la 0.2.0.
 
-Terminal 2, à laisser ouvert pendant toute la démonstration (une ligne toutes les 200 ms) :
+Terminal 2, à laisser ouvert pendant toute la démonstration (une ligne toutes les 200 ms).
+PowerShell ne résout pas `deckgen.localhost` : la boucle utilise `deckgen.local`, à ajouter au
+fichier hosts ([deploy/README.md](../deploy/README.md)). Elle n'envoie pas de cookie : chaque
+requête peut aller à un pod différent, ce qui montre bien les deux versions servies ensemble.
 
 ```powershell
 while ($true) {
   try {
-    $r = Invoke-WebRequest http://localhost:30080/version.json -UseBasicParsing -DisableKeepAlive -TimeoutSec 2
+    $r = Invoke-WebRequest http://deckgen.local/version.json -UseBasicParsing -DisableKeepAlive -TimeoutSec 2
     $v = if ($r.Content.TrimStart().StartsWith('{')) { ($r.Content | ConvertFrom-Json).version } else { '0.1.0' }
     "{0:HH:mm:ss.f}  HTTP {1}  version {2}" -f (Get-Date), $r.StatusCode, $v
   } catch { "{0:HH:mm:ss.f}  ERREUR {1}" -f (Get-Date), $_.Exception.Message }
@@ -162,8 +171,9 @@ kubectl rollout status deployment/frontend -n deckgen
 
 ### 1. Version 1 en service
 
-Navigateur sur http://localhost:30080 (pas de pied de page), terminal 2 affichant
-`HTTP 200 version 0.1.0`.
+Navigateur sur http://deckgen.local ou http://deckgen.localhost (pas de pied de page), terminal 2
+affichant `HTTP 200 version 0.1.0`. Les captures datent de l'issue 14, quand le frontend était
+exposé sur le NodePort `localhost:30080`.
 
 ![Version 0.1.0 en service](images/rollout-1-v1.png)
 

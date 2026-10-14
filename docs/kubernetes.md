@@ -12,12 +12,17 @@ Les mises à jour sans interruption et le retour arrière sont décrits dans
 
 ```mermaid
 flowchart LR
-    user([Navigateur]) -- "localhost:30080" --> svcF
+    user([Navigateur]) -- "deckgen.local:80<br/>deckgen.localhost:80" --> traefik
+
+    subgraph nst [namespace traefik]
+        traefik[Traefik v3.7.14<br/>Service LoadBalancer :80]
+    end
 
     subgraph ns [namespace deckgen]
-        svcF[Service frontend<br/>NodePort 30080 → 8080] --> podF[Pods frontend ×2<br/>nginx, uid 101]
-        podF -- "api.deckgen.svc.cluster.local:3000" --> svcA[Service api<br/>ClusterIP 3000]
-        svcA --> podA[Pods api ×2 à 5<br/>Node.js, uid 1000<br/>initContainer wait-for-postgres]
+        ing[/Ingress frontend : /<br/>Ingress api : /api/]
+        mw[/Middlewares<br/>api-strip-prefix<br/>api-security-headers/]
+        svcF[Service frontend<br/>ClusterIP 8080<br/>cookie deckgen_frontend] --> podF[Pods frontend ×2<br/>nginx, uid 101]
+        svcA[Service api<br/>ClusterIP 3000] --> podA[Pods api ×2 à 5<br/>Node.js, uid 1000<br/>initContainer wait-for-postgres]
         hpa{{HPA api<br/>CPU 70 %}} -. replicas .-> podA
         podA -- "postgres:5432" --> svcP[Service postgres<br/>ClusterIP 5432]
         svcP --> podP[Pod postgres ×1]
@@ -31,11 +36,16 @@ flowchart LR
         cmF[/ConfigMap frontend-config/] -. envFrom .-> podF
     end
 
+    traefik -. "lit" .-> ing
+    traefik -- "/ (cookie sticky)" --> podF
+    traefik -- "/api, préfixe retiré" --> podA
+    ing -. "annotation" .-> mw
     pvc -- "lié (volumeName)" --> pv[(PV deckgen-postgres<br/>1 Gi, Retain<br/>hostPath /var/lib/deckgen/postgres)]
     podG -- "host.docker.internal:11434" --> ollama[Ollama sur Windows<br/>GPU]
 ```
 
-Chaque pod est créé par un Deployment (via un ReplicaSet), non représenté sur le schéma.
+Chaque pod est créé par un Deployment (via un ReplicaSet), non représenté sur le schéma. Traefik
+lit les Services pour connaître les pods, puis leur envoie les requêtes directement.
 
 ## Rôle de chaque objet
 
@@ -50,9 +60,12 @@ Chaque pod est créé par un Deployment (via un ReplicaSet), non représenté su
 | **HorizontalPodAutoscaler** | Ajuste le nombre de pods de l'api (2 à 5) selon leur consommation CPU mesurée par metrics-server |
 | **PersistentVolume** | Un espace de stockage réel du cluster (ici, un dossier du node). Ressource du cluster, sans namespace |
 | **PersistentVolumeClaim** | La demande de stockage d'une application (« 1 Gi en lecture-écriture »), liée à un PersistentVolume. Le pod utilise la claim, sans connaître le stockage réel |
+| **Ingress** | Règles de routage HTTP (nom d'hôte, chemin → Service), lues par un contrôleur Ingress |
+| **IngressClass** | Désigne le contrôleur chargé d'un Ingress (`traefik`) |
+| **Middleware** (CRD de Traefik) | Traitement appliqué à une route par Traefik : retrait du préfixe `/api`, en-têtes de sécurité |
 
-Les Services ClusterIP (`postgres`, `generator`, `api`) ne sont joignables que depuis le cluster.
-Seul le frontend est exposé à l'extérieur, en NodePort.
+Tous les Services sont en ClusterIP : ils ne sont joignables que depuis le cluster. Le seul point
+d'entrée est Traefik (Service LoadBalancer sur le port 80), qui applique les règles des Ingress.
 
 ## Labels et selectors
 
@@ -85,13 +98,14 @@ fichiers, ce qui corrompt une base. `Recreate` arrête l'ancien pod avant de cr�
 prix d'une courte interruption. C'est indispensable avec le volume persistant (voir
 « Persistance des données »).
 
-**NodePort plutôt que LoadBalancer.** Un Service LoadBalancer demande une adresse à un
-équilibreur de charge externe, normalement fourni par un cloud. Docker Desktop en simule un sur
-`localhost`, mais il utiliserait directement le port du Service (8080), déjà pris par
-docker-compose, et ce comportement n'existe pas sur un cluster kubeadm ordinaire. NodePort
-ouvre un port fixe (30080, dans la plage 30000-32767) sur le node, que Docker Desktop relaie sur
-`localhost` : c'est le mécanisme de base, présent sur tout cluster. Il sera remplacé par un
-Ingress à l'issue 17.
+**Exposition : du NodePort à l'Ingress.** Jusqu'à l'issue 17, le frontend était un Service
+NodePort : un port fixe du node (dans la plage 30000-32767), que Docker Desktop relayait sur
+`localhost`. C'est le mécanisme de base, présent sur tout cluster, mais avec un port non standard
+et un port par service exposé. Un Service LoadBalancer demande une adresse à un équilibreur de
+charge externe, normalement fourni par un cloud ; Docker Desktop en simule un sur `localhost`.
+L'application est maintenant exposée par un **Ingress** (section « Ingress ») : un seul
+LoadBalancer, celui de Traefik sur le port 80, route vers tous les services selon le nom d'hôte
+et le chemin. Le Service frontend est repassé en ClusterIP.
 
 **Nom DNS complet pour nginx.** Dans un pod, `/etc/resolv.conf` contient
 `search deckgen.svc.cluster.local svc.cluster.local cluster.local` : les outils système
@@ -310,7 +324,7 @@ Pendant la charge, `kubectl apply -f deploy/` laisse l'api à 5 pods (`unchanged
 | PostgreSQL à 0 réplica | Pods api `0/1` en moins de 10 s (readiness 503), endpoints `ready=false`, nginx répond 502, **RESTARTS inchangé** ; retour de PostgreSQL : pods Ready |
 | Processus d'un generator figé (`docker kill --signal=STOP`) | 3 échecs de liveness, « Container generator failed liveness probe, will be restarted », RESTARTS 0 → 1 en 63 s (30 s de détection + 30 s de délai de grâce, un processus figé ne traite pas SIGTERM) |
 | Répartition de charge | 20 requêtes : 8 et 12 sur les deux pods api |
-| Génération de bout en bout sur http://localhost:30080 | 201 en 26,6 s, 6 cartes (cours Java), export Anki OK |
+| Génération de bout en bout (par le NodePort de l'époque) | 201 en 26,6 s, 6 cartes (cours Java), export Anki OK |
 
 Deux détails de ces tests :
 
@@ -526,6 +540,198 @@ manifeste entier, mot de passe en clair compris, dans l'annotation
   d'un coffre (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault) : le mot de passe n'est
   jamais dans Git, et sa rotation se fait dans le coffre.
 
+## Ingress
+
+L'application est joignable sur **http://deckgen.local** (après ajout au fichier hosts) et
+**http://deckgen.localhost** (sans configuration, dans un navigateur ou `curl.exe`). Installation et
+fichier hosts : [deploy/README.md](../deploy/README.md).
+
+### Ingress et contrôleur Ingress
+
+Un **Ingress** n'est qu'une description : « pour l'hôte `deckgen.local`, le chemin `/api` va au
+Service `api` ». Kubernetes l'enregistre mais ne fait rien d'autre : aucun composant du cluster de
+base ne lit les Ingress. Il faut un **contrôleur Ingress**, un reverse proxy qui tourne dans le
+cluster, surveille les Ingress et les Services par l'API Kubernetes et configure ses routes en
+conséquence. Sans contrôleur, un Ingress reste sans effet (colonne ADDRESS vide).
+
+L'**IngressClass** relie les deux : chaque Ingress indique `ingressClassName: traefik`, et seul le
+contrôleur de cette classe le prend en charge. Plusieurs contrôleurs peuvent ainsi coexister. La
+classe `traefik` est créée par le chart, sans être la classe par défaut : un Ingress qui ne la
+demande pas n'est pas servi par Traefik.
+
+| Composant | Fichier | Installé par |
+|-----------|---------|--------------|
+| Contrôleur Traefik (namespace `traefik`), IngressClass `traefik`, CRD Traefik | [deploy/cluster/traefik-values.yaml](../deploy/cluster/traefik-values.yaml) | `helm upgrade --install`, une fois par cluster |
+| Ingress `frontend` et `api`, Middlewares (namespace `deckgen`) | [deploy/ingress.yaml](../deploy/ingress.yaml) | `kubectl apply -f deploy/` |
+
+Le contrôleur est un composant du cluster, comme metrics-server, et non de l'application :
+supprimer le namespace `deckgen` ne le touche pas. Le Kind `Middleware` est défini par une CRD
+installée par le chart : **Traefik doit être installé avant `kubectl apply -f deploy/`**, sinon
+l'apply échoue avec `no matches for kind "Middleware" in version "traefik.io/v1alpha1"`.
+
+### Choix de Traefik
+
+**ingress-nginx**, longtemps le contrôleur le plus répandu, est **retiré depuis mars 2026** : le
+projet Kubernetes a arrêté sa maintenance (plus de nouvelles versions ni de correctifs de
+sécurité), faute de mainteneurs, après des failles graves en 2025 (« IngressNightmare », liées à
+ses annotations qui injectent de la configuration nginx). L'installer aujourd'hui, ce serait
+exposer le cluster avec un logiciel qui ne recevra plus de correctifs.
+
+**Traefik** a été retenu parce qu'il :
+
+- est maintenu activement, avec un chart Helm officiel (`traefik/traefik`) ;
+- lit les Ingress standard (provider `kubernetesIngress`) et ses propres ressources (provider
+  `kubernetesCRD`, pour les Middlewares) ;
+- prend aussi en charge la Gateway API (voir plus bas) : la migration ne demandera pas de changer
+  de contrôleur ;
+- tourne en non-root, avec un système de fichiers en lecture seule, par défaut.
+
+Version fixée : chart **41.7.1**, image **traefik:v3.7.14** (écrite aussi dans `image.tag`). Une
+mise à jour est une modification volontaire du fichier, pas l'effet d'une réinstallation.
+
+### Valeurs du chart
+
+| Réglage | Valeur | Pourquoi |
+|---------|--------|----------|
+| `service.type` | `LoadBalancer` | Docker Desktop publie les ports d'un Service LoadBalancer sur `localhost` (EXTERNAL-IP `localhost`) |
+| `ports.web` | port 8000 dans le pod, 80 exposé | Un processus non-root ne peut pas écouter sous 1024 ; le Service fait la traduction 80 → 8000 |
+| `ports.websecure.expose.default` | `false` | Pas de TLS sur ce cluster local : le port 443 n'est pas publié |
+| `providers.kubernetesIngress`, `providers.kubernetesCRD` | activés | Ingress standard et Middlewares |
+| `ingressClass` | `traefik`, pas par défaut | Un Ingress doit demander Traefik explicitement |
+| `api.dashboard`, `ingressRoute.dashboard.enabled` | `true`, `false` | Tableau de bord actif mais sans route : port 8080 absent du Service, accès par `kubectl port-forward` uniquement |
+| `global.checkNewVersion`, `sendAnonymousUsage` | `false` | Aucun appel vers Internet au démarrage |
+| `resources` | requests 50m / 64Mi, limits 500m / 256Mi | Mesuré : 1m CPU / 26Mi au repos |
+| `podSecurityContext`, `securityContext` | uid 65532, non-root, `drop: [ALL]`, lecture seule | Valeurs par défaut du chart, écrites pour être visibles ; vérifié : le pod tourne en uid 65532 |
+| `deployment.replicas` | 1 | Suffisant en local (voir limites) |
+
+### Règles de routage
+
+| Hôte | Chemin | Destination | Middlewares |
+|------|--------|-------------|-------------|
+| `deckgen.local`, `deckgen.localhost` | `/api` (Prefix) | Service `api` (3000) | `api-strip-prefix`, `api-security-headers` |
+| `deckgen.local`, `deckgen.localhost` | `/` (Prefix) | Service `frontend` (8080) | aucun (nginx ajoute ses en-têtes) |
+| autre hôte (`localhost`…) | | 404 de Traefik | |
+
+`/api` passe avant `/` : Traefik donne la priorité à la règle la plus longue. `pathType: Prefix`
+compare des segments entiers : `/api/decks` va à l'api, `/apiculture` irait au frontend.
+
+Il y a **deux Ingress** et non un seul, parce que l'annotation
+`traefik.ingress.kubernetes.io/router.middlewares` s'applique à tous les chemins de l'Ingress qui
+la porte : dans un Ingress unique, le frontend perdrait aussi son préfixe.
+
+Avant l'Ingress, le navigateur appelait `/api/...` sur nginx, qui relayait à l'api. Désormais
+Traefik envoie `/api` directement aux pods api : un saut de moins, et l'api passe à l'échelle sans
+dépendre du frontend. La règle `/api/` de nginx reste dans l'image, utilisée par docker-compose.
+
+### Middlewares
+
+Un **Middleware** est une ressource Traefik (CRD `traefik.io/v1alpha1`) qui modifie une requête ou
+une réponse au passage. Il est référencé par l'annotation de l'Ingress sous la forme
+`<namespace>-<nom>@kubernetescrd`, et appliqué dans l'ordre de la liste.
+
+- **`api-strip-prefix`** (StripPrefix) : retire `/api` avant de transmettre, comme le faisait
+  nginx. L'api connaît `/decks`, pas `/api/decks`. Vérifié : `/api/route-inconnue` renvoie le 404
+  de l'api (`{"detail":"Route introuvable"}`), donc la requête est bien arrivée à l'api, sans le
+  préfixe.
+- **`api-security-headers`** (Headers) : `X-Content-Type-Options: nosniff` (pas de devinette du
+  type de contenu), `X-Frame-Options: DENY` (pas d'affichage dans une iframe, contre le
+  clickjacking), `Referrer-Policy: strict-origin-when-cross-origin`. Sur `/`, nginx ajoutait déjà
+  ces en-têtes ; `/api` ne passe plus par nginx, le middleware les remet.
+
+### Affinité par cookie
+
+Le Service frontend avait `sessionAffinity: ClientIP` (issue 14) : pendant un rolling update,
+toutes les requêtes d'un navigateur allaient au même pod, donc `index.html` et les fichiers JS
+hachés qu'il référence venaient de la même version. Mais Traefik **ne passe pas par l'IP du
+Service** : il lit la liste des pods (EndpointSlices) et répartit lui-même, en round-robin.
+L'affinité du Service n'aurait plus aucun effet.
+
+Elle est remplacée par un **cookie sticky** de Traefik, déclaré par des annotations du Service
+frontend : à la première réponse, Traefik pose le cookie `deckgen_frontend` (HttpOnly,
+SameSite=Lax, sans `Secure` car le site est en HTTP), qui désigne un pod. Les requêtes suivantes
+qui le présentent vont à ce pod tant qu'il est prêt. Une fois ce pod supprimé, Traefik en choisit
+un autre et remplace le cookie.
+
+Mesuré par la boucle de l'issue 14 (`index.html`, puis le JS qu'il référence) pendant deux
+changements de version réels (0.2.0 → 0.1.0 → 0.2.0), à travers l'Ingress :
+
+| Client | Visites | 404 sur le JS |
+|--------|---------|---------------|
+| Avec le cookie | 379 (153 en 0.1.0, 226 en 0.2.0) | **0** |
+| Sans cookie (round-robin) | 378 | **157** |
+
+Sans cookie, environ 40 % des visites mélangent les deux versions : c'est le problème de
+l'issue 14, ce qui montre que le cookie est bien ce qui l'évite.
+
+Le Service frontend est donc en **ClusterIP**, sans `sessionAffinity` : le port 30080 a disparu
+(vérifié : `curl.exe http://localhost:30080` échoue, code 7).
+
+### Délais d'une génération longue
+
+Une génération peut durer jusqu'à 300 s côté api. Trois délais de Traefik sont en jeu sur le
+chemin d'une requête :
+
+| Délai | Ce qu'il mesure | Défaut v3 | Valeur |
+|-------|-----------------|-----------|--------|
+| `entryPoints.web.transport.respondingTimeouts.readTimeout` | Lecture de la requête du client (en-têtes et corps) | 60 s | **60 s** (inchangé) |
+| `entryPoints.web.transport.respondingTimeouts.writeTimeout` | Envoi de la réponse complète, compté depuis la fin de la lecture | 0 (aucune limite) | **330 s** |
+| `entryPoints.web.transport.respondingTimeouts.idleTimeout` | Connexion keep-alive sans requête | 180 s | 180 s |
+| `serversTransport.forwardingTimeouts.responseHeaderTimeout` | Attente des en-têtes de réponse de l'api | 0 (aucune limite) | **330 s** |
+
+330 s laisse 30 s de marge au-dessus des 300 s de l'api : c'est l'api qui répond (504) si la
+génération est trop longue, pas Traefik qui coupe sans explication. `readTimeout` reste à 60 s : un
+corps de requête fait au plus 100 Ko, et une valeur courte protège contre les clients qui envoient
+leur requête très lentement.
+
+Tests avec un modèle plus lent (`gemma4:latest`, mis temporairement dans la ConfigMap du
+generator, puis remplacé par `gemma3:4b` et `rollout restart`) :
+
+| Test | Réglages | Résultat |
+|------|----------|----------|
+| A | `readTimeout` 60 s, `writeTimeout` par défaut | 201 en 61,6 s et 81,7 s : `readTimeout` ne coupe pas une requête qui attend sa réponse |
+| B | `writeTimeout` 60 s | Coupée à 72 s, réponse vide (`curl` code 52) : c'est `writeTimeout` qui limite |
+| C | Valeurs finales (`writeTimeout` 330 s) | 201 en 88,8 s |
+
+Piège rencontré au test C : juste après `helm upgrade --wait`, une première tentative a été coupée
+à 71 s. L'ancien pod Traefik (avec `writeTimeout` 60 s) servait encore les connexions, le temps de
+son arrêt. Après une mise à jour du chart, il faut attendre qu'il ne reste qu'un pod Traefik.
+
+### Gateway API, l'évolution
+
+L'Ingress est figé : seuls l'hôte et le chemin sont standard, tout le reste (middlewares, cookie,
+délais) passe par des annotations propres à chaque contrôleur, comme ici. La **Gateway API**
+(`gateway.networking.k8s.io`) est son successeur officiel :
+
+- elle sépare les rôles : `GatewayClass` (le contrôleur), `Gateway` (le point d'entrée, géré par
+  l'équipe plateforme), `HTTPRoute` (les routes, gérées par chaque application) ;
+- elle rend standard ce qui était en annotations : réécriture de chemin (`URLRewrite`), ajout
+  d'en-têtes, répartition pondérée entre deux versions (déploiement canari).
+
+Traefik la prend en charge (provider `kubernetesGateway`) : la migration remplacerait
+`deploy/ingress.yaml` par une `Gateway` et deux `HTTPRoute`, sans changer de contrôleur. L'Ingress
+a été gardé ici car il est plus simple et demandé par l'énoncé.
+
+### Résultats des vérifications
+
+| Vérification | Résultat |
+|--------------|----------|
+| Port 80 libre avant l'installation | `Get-NetTCPConnection -LocalPort 80` : aucun processus |
+| `kubectl get pods -n traefik` | 1 pod Running, image traefik:v3.7.14, uid 65532 |
+| Service Traefik | LoadBalancer, EXTERNAL-IP `localhost`, port 80 seul |
+| `kubectl get ingressclass` | `traefik`, contrôleur `traefik.io/ingress-controller` |
+| `kubectl get ingress -n deckgen` | `api` et `frontend`, ADDRESS `localhost`, hôtes deckgen.local et deckgen.localhost |
+| `/`, `/decks/3`, `/version.json` sur deckgen.localhost | 200 (fallback SPA de nginx inclus) |
+| `/api/health`, `/api/decks` | 200 |
+| `deckgen.local` (`curl.exe --resolve deckgen.local:80:127.0.0.1`) | 200 |
+| `/api/route-inconnue` | 404 `{"detail":"Route introuvable"}` de l'api : préfixe retiré |
+| Hôte inconnu (`http://localhost/`) | 404 de Traefik |
+| En-têtes sur `/` et `/api/decks` | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` présents ; cookie `deckgen_frontend` (HttpOnly, SameSite=Lax) sur `/` |
+| Génération de bout en bout (gemma3:4b) | 201 en 28,3 s, 10 cartes (cours Java), export Anki OK |
+| Génération de plus de 60 s | 201 en 88,8 s (voir délais) |
+| Rolling update du frontend, boucle d'assets | 0 404 avec le cookie, 157 / 378 sans |
+| `http://localhost:30080` | Ne répond plus (`curl` code 7) |
+| Données | Paquets 1, 2 et 4 intacts, plus le paquet 6 créé par le test ; tous les pods Ready |
+
 ## Limites provisoires
 
 | Limite                     | Conséquence                                                   | Correction  |
@@ -533,7 +739,11 @@ manifeste entier, mot de passe en clair compris, dans l'annotation
 | PV `hostPath` statique     | Les données sont dans un dossier d'un node précis : sur plusieurs nodes, un pod déplacé ne les retrouverait pas. Elles dépendent du disque de Docker Desktop (perdues par une réinitialisation), sans sauvegarde | StorageClass dynamique et sauvegardes `pg_dump` (production) |
 | Secret non chiffré dans etcd | Le Secret n'est qu'encodé en base64 ; toute personne qui peut lire les Secrets du namespace, ou une copie d'etcd, obtient le mot de passe | Chiffrement au repos, RBAC, External Secrets (production) |
 | ConfigMap sans redémarrage automatique | Une modification n'est prise en compte qu'après `kubectl rollout restart` | Checksum ou nom versionné (Helm, Kustomize) |
-| NodePort                   | Port non standard, un port par service exposé                | Ingress, issue 17 |
+| HTTP sans TLS              | Le trafic n'est pas chiffré ; le cookie ne peut pas avoir le drapeau `Secure` | Entrée `websecure` avec un certificat (cert-manager) |
+| Un seul pod Traefik        | Point unique de défaillance de l'entrée : pendant son remplacement, l'application est injoignable quelques secondes | 2 réplicas et un PodDisruptionBudget |
+| `deckgen.local` par fichier hosts | Entrée manuelle, en administrateur, sur chaque poste ; `.local` est réservé à mDNS | Nom DNS réel (production) ; `deckgen.localhost` en local |
+| Affinité par cookie        | Toutes les requêtes d'un navigateur vont au même pod frontend : la charge n'est répartie qu'entre navigateurs | Assets des deux versions servis pendant la transition (stockage partagé ou CDN) |
+| Ingress et annotations Traefik | Middlewares, cookie et délais propres à Traefik : changer de contrôleur demande de les réécrire | Gateway API |
 | Un seul node               | Les réplicas protègent d'une panne de pod, pas d'une panne de machine : tous les pods sont sur le même node | Cluster multi-node (hors projet) |
 | Ollama hors du cluster     | Point unique de défaillance : s'il est arrêté, les générations échouent (503), sans que Kubernetes puisse le relancer | Hors projet (GPU dans le cluster) |
 | `--kubelet-insecure-tls`   | metrics-server ne vérifie pas le certificat du kubelet        | Certificats du kubelet signés par le cluster (hors Docker Desktop) |
