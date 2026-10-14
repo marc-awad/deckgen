@@ -10,7 +10,9 @@ metadata:
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: deckgen
 spec:
-  replicas: 1
+  # Two pods: one can fail or be replaced while the other keeps serving.
+  # No autoscaling: the heavy work is done by Ollama, outside the cluster.
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: generator
@@ -43,7 +45,39 @@ spec:
               value: http://host.docker.internal:11434
             - name: OLLAMA_MODEL
               value: gemma3:4b
-          # Probes and resources: issue 13
+          # /health never calls Ollama: these probes only check this process.
+          # Startup: up to 30 s (15 x 2 s) to start before the liveness probe takes over
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 15
+          # Restarted after 30 s without answering (3 x 10 s)
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Removed from the Service after 2 failures (about 10 s)
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          # Measured: 3-4m CPU / 41Mi, idle and during a generation (Ollama does the work)
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
