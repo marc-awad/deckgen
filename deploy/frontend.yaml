@@ -1,5 +1,22 @@
 # Frontend: nginx serves the React app and forwards /api/ to the api.
 # Reachable from the machine at http://localhost:30080 (NodePort).
+# Configuration read by the entrypoint of the nginx image at startup
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: deckgen
+data:
+  # Full DNS name: the nginx resolver ignores the search domains of /etc/resolv.conf,
+  # so the short name "api" would not be found
+  API_UPSTREAM: api.deckgen.svc.cluster.local:3000
+  # One nginx worker per CPU of the limit (1) instead of one per core of the machine (22)
+  NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE: "1"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,14 +69,9 @@ spec:
           ports:
             - name: http
               containerPort: 8080
-          env:
-            # Full DNS name: the nginx resolver ignores the search domains of /etc/resolv.conf,
-            # so the short name "api" would not be found
-            - name: API_UPSTREAM
-              value: api.deckgen.svc.cluster.local:3000
-            # One nginx worker per CPU of the limit (1) instead of one per core of the machine (22)
-            - name: NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE
-              value: "1"
+          envFrom:
+            - configMapRef:
+                name: frontend-config
           lifecycle:
             # Keeps serving while the pod is removed from the Service endpoints; then the kubelet
             # sends the image STOPSIGNAL, SIGQUIT: graceful nginx shutdown

@@ -24,8 +24,11 @@ flowchart LR
         podP --> pvc[(PVC postgres-data)]
         podA -- "generator:8000" --> svcG[Service generator<br/>ClusterIP 8000]
         svcG --> podG[Pods generator ×2<br/>FastAPI, uid 10001]
-        secret[/Secret<br/>postgres-credentials/] -. secretKeyRef .-> podP
-        secret -. secretKeyRef .-> podA
+        secret[/Secret<br/>postgres-credentials/] -. envFrom .-> podP
+        secret -. envFrom .-> podA
+        cmA[/ConfigMap api-config/] -. envFrom .-> podA
+        cmG[/ConfigMap generator-config/] -. envFrom .-> podG
+        cmF[/ConfigMap frontend-config/] -. envFrom .-> podF
     end
 
     pvc -- "lié (volumeName)" --> pv[(PV deckgen-postgres<br/>1 Gi, Retain<br/>hostPath /var/lib/deckgen/postgres)]
@@ -42,6 +45,7 @@ Chaque pod est créé par un Deployment (via un ReplicaSet), non représenté su
 | **Deployment** | Déclare l'état voulu : quelle image, combien de pods, avec quelle configuration. Il crée un ReplicaSet qui maintient ce nombre de pods : un pod supprimé est recréé (mesuré : 2 s pour l'api) |
 | **Pod**        | Le conteneur en cours d'exécution. Éphémère : son nom et son IP changent à chaque recréation |
 | **Service**    | Adresse stable (IP virtuelle et nom DNS) devant les pods qui portent un label donné. Les autres pods utilisent le Service, jamais l'IP d'un pod |
+| **ConfigMap**  | Configuration non sensible d'un service (adresses, délais, modèle), injectée en variables d'environnement |
 | **Secret**     | Identifiants PostgreSQL, créés par `kubectl create secret` et injectés dans les pods postgres et api |
 | **HorizontalPodAutoscaler** | Ajuste le nombre de pods de l'api (2 à 5) selon leur consommation CPU mesurée par metrics-server |
 | **PersistentVolume** | Un espace de stockage réel du cluster (ici, un dossier du node). Ressource du cluster, sans namespace |
@@ -72,7 +76,8 @@ Chaque ressource porte trois labels, recommandés par la documentation de Kubern
 **Secret créé hors de Git.** Les valeurs d'un Secret ne sont qu'encodées en base64, pas
 chiffrées : un Secret versionné exposerait le mot de passe. Il est donc créé par
 `kubectl create secret generic` avec un mot de passe aléatoire (commande dans
-[deploy/README.md](../deploy/README.md)). Les pods lisent chaque clé avec `secretKeyRef`.
+[deploy/README.md](../deploy/README.md)). Les pods le lisent avec `envFrom` (voir
+« Configuration et secrets »).
 
 **`Recreate` pour PostgreSQL.** La stratégie par défaut, `RollingUpdate`, démarre le nouveau pod
 avant d'arrêter l'ancien : pendant quelques secondes, deux PostgreSQL utiliseraient les mêmes
@@ -419,12 +424,115 @@ celui de la base : l'api serait refusée. Il faut recréer le Secret avec les m�
 (`ALTER USER`, par une connexion locale au pod, sans mot de passe). Procédures dans
 [deploy/README.md](../deploy/README.md).
 
+## Configuration et secrets
+
+Consigne : « ConfigMap pour les configurations non sensibles, Secret pour les mots de passe ;
+aucun secret en clair dans Git ni dans l'image Docker ».
+
+### ConfigMap contre Secret
+
+| | ConfigMap | Secret |
+|-|-----------|--------|
+| Contenu | configuration non sensible : adresses, délais, modèle, niveau de logs | mots de passe, clés, jetons |
+| Dans Git | oui, dans le fichier du service (`generator-config`, `api-config`, `frontend-config`) | **non** : créé par `kubectl create secret`, seul un modèle à valeurs factices est versionné |
+| Stockage | en clair dans etcd | encodé en **base64** dans etcd |
+| Affichage | `kubectl get configmap -o yaml` montre les valeurs | `kubectl describe` masque les valeurs (seulement leur taille) |
+
+**base64 n'est pas du chiffrement.** C'est un simple encodage, réversible sans clé :
+`[Convert]::FromBase64String(...)` redonne le mot de passe. Il permet de stocker des valeurs
+binaires, pas de les protéger. La protection d'un Secret vient de ce qui l'entoure : il n'est pas
+dans Git, les droits d'accès Kubernetes (RBAC) peuvent le réserver à certains utilisateurs, et
+etcd peut le chiffrer (voir « En production »).
+
+Toute la configuration est maintenant dans les ConfigMaps : les Deployments ne contiennent plus
+aucune valeur de configuration, seulement des références. Les valeurs sont celles d'avant (les
+défauts de `OLLAMA_TIMEOUT`, `OLLAMA_NUM_CTX`, `DB_PORT`, `GENERATOR_TIMEOUT_MS` et `LOG_LEVEL`
+sont écrits explicitement) : le comportement est identique, vérifié dans les pods avec `env`.
+
+### envFrom contre env + configMapKeyRef
+
+| | `envFrom` (choix du projet) | `env` + `configMapKeyRef` / `secretKeyRef` |
+|-|------------------------------|---------------------------------------------|
+| Écriture | une ligne par ConfigMap ou Secret | un bloc de 5 lignes par variable |
+| Variables injectées | **toutes** les clés, sous leur nom | seulement celles listées, renommables |
+| Ajouter une variable | l'ajouter au ConfigMap | l'ajouter au ConfigMap **et** au Deployment |
+| Risque | une clé ajoutée par erreur est injectée aussi | aucun : la liste est explicite |
+
+Chaque ConfigMap ne contient que les variables de son service, et le Secret exactement les trois
+clés attendues (`POSTGRES_DB`, `POSTGRES_PASSWORD`, `POSTGRES_USER`, vérifié) : `envFrom`
+n'injecte rien d'inattendu. Si une même variable venait de deux sources, `env` l'emporterait sur
+`envFrom`, et la dernière source de `envFrom` sur les précédentes.
+
+`kubectl describe pod` ne montre que les références (« Environment Variables from:
+api-config ConfigMap, postgres-credentials Secret »), jamais les valeurs du Secret.
+
+### Mise à jour d'un ConfigMap
+
+Les variables d'environnement sont lues par le processus **au démarrage** du conteneur. Modifier un
+ConfigMap ne change donc rien aux pods en cours ; seuls les pods créés ensuite voient la nouvelle
+valeur. Démonstration avec `OLLAMA_MODEL` :
+
+| Étape | Résultat |
+|-------|----------|
+| `OLLAMA_MODEL: gemma4:latest` dans le ConfigMap, `kubectl apply` | « configmap/generator-config configured », « deployment.apps/generator unchanged » |
+| Pods en cours | `printenv OLLAMA_MODEL` : `gemma3:4b` ; génération : log `model=gemma3:4b`, 16,6 s |
+| `kubectl rollout restart deployment/generator` | nouveaux pods : `printenv OLLAMA_MODEL` : `gemma4:latest` |
+| Génération | log `model=gemma4:latest`, 201 en 96 s (modèle de 9,5 Go, 67 % sur CPU : il ne tient pas dans les 6 Go du GPU) |
+| Retour à `gemma3:4b` (fichier, apply, rollout restart) | pods en `gemma3:4b`, `kubectl apply --dry-run` : tout `unchanged` |
+
+`rollout restart` ajoute une annotation de date au template des pods : le Deployment fait un
+rolling update, sans interruption. Deux alternatives déclenchent ce redémarrage automatiquement :
+
+- **annotation de checksum** : le template des pods porte une empreinte du contenu du ConfigMap
+  (`checksum/config: <sha256>`). Modifier le ConfigMap change l'empreinte, donc le template, donc
+  déclenche un rolling update. C'est la pratique des charts Helm, mais il faut un outil pour
+  calculer l'empreinte : à la main, on l'oublierait ;
+- **ConfigMap immuable à nom versionné** : `generator-config-v2` avec `immutable: true`, et le
+  Deployment qui pointe vers ce nouveau nom. Changer de nom modifie le template (rolling update),
+  l'ancien ConfigMap permet un `rollout undo` cohérent, et `immutable` protège d'une modification
+  accidentelle. Kustomize le fait automatiquement (`configMapGenerator`, suffixe de hash).
+
+Sans Helm ni Kustomize, `kubectl rollout restart` est la méthode la plus simple et la plus lisible.
+
+### Preuves : aucun secret en clair dans Git ni dans les images
+
+| Vérification | Méthode | Résultat |
+|--------------|---------|----------|
+| Dépôt | Mot de passe lu depuis le Secret dans une variable (jamais affiché), recherche exacte avec ripgrep dans les 121 fichiers du dépôt (règles `.gitignore`, fichiers cachés compris), puis dans tout le dossier y compris les fichiers ignorés ; témoin : `deckgen-manual` trouvé dans 2 fichiers | **0 fichier** |
+| Modèle du Secret | `postgres-credentials.yaml.example`, valeurs factices, non appliqué (dry-run : aucun Secret) | aucune vraie valeur |
+| Variables des images | `docker image inspect` (`Config.Env`) des 3 images déployées | aucune variable de mot de passe (`GPG_KEY` du generator est l'identifiant public de la clé qui signe Python, hérité de l'image officielle) |
+| Construction des images | `docker history --no-trunc` (un `ARG` ou `ENV` y resterait visible) | aucune mention de mot de passe |
+| Fichiers des images | `find / -name ".env*"`, et recherche du vrai mot de passe dans tous les fichiers (en root : 5 232 fichiers pour l'api, 1 234 pour le frontend, 6 418 pour le generator ; témoin trouvé dans chaque image) | **0 fichier**, 0 `.env` |
+| Pods | `kubectl describe pod` | références seulement |
+
+`git grep` n'a pas été utilisé (consigne : aucune commande git) : ripgrep applique les mêmes règles
+`.gitignore` et parcourt les fichiers versionnés et non suivis, un ensemble plus large.
+
+Ce qui rend ces résultats possibles : le Secret est créé par commande, les `.dockerignore` excluent
+`.env` et `.env.*`, et les images ne reçoivent leur configuration qu'à l'exécution.
+
+Créer le Secret avec `kubectl create` et non `kubectl apply` compte aussi : `apply` recopie le
+manifeste entier, mot de passe en clair compris, dans l'annotation
+`kubectl.kubernetes.io/last-applied-configuration` (vérifié en dry-run).
+
+### En production
+
+- **Chiffrement au repos dans etcd** (`EncryptionConfiguration`, clé gérée par un KMS) : une copie
+  d'etcd ou de ses sauvegardes ne révèle plus les Secrets.
+- **RBAC** : seuls les comptes qui en ont besoin peuvent lire les Secrets du namespace ; les
+  développeurs gardent l'accès aux ConfigMaps et aux pods.
+- **Secrets versionnés de façon sûre** : Sealed Secrets (le Secret est chiffré avec la clé publique
+  du cluster et peut aller dans Git), ou **External Secrets Operator**, qui crée le Secret à partir
+  d'un coffre (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault) : le mot de passe n'est
+  jamais dans Git, et sa rotation se fait dans le coffre.
+
 ## Limites provisoires
 
 | Limite                     | Conséquence                                                   | Correction  |
 |----------------------------|---------------------------------------------------------------|-------------|
 | PV `hostPath` statique     | Les données sont dans un dossier d'un node précis : sur plusieurs nodes, un pod déplacé ne les retrouverait pas. Elles dépendent du disque de Docker Desktop (perdues par une réinitialisation), sans sauvegarde | StorageClass dynamique et sauvegardes `pg_dump` (production) |
-| Configuration en dur       | `OLLAMA_URL`, `OLLAMA_MODEL`, `DB_HOST`... sont dans les Deployments | ConfigMap, issue 15 |
+| Secret non chiffré dans etcd | Le Secret n'est qu'encodé en base64 ; toute personne qui peut lire les Secrets du namespace, ou une copie d'etcd, obtient le mot de passe | Chiffrement au repos, RBAC, External Secrets (production) |
+| ConfigMap sans redémarrage automatique | Une modification n'est prise en compte qu'après `kubectl rollout restart` | Checksum ou nom versionné (Helm, Kustomize) |
 | NodePort                   | Port non standard, un port par service exposé                | Ingress, issue 17 |
 | Un seul node               | Les réplicas protègent d'une panne de pod, pas d'une panne de machine : tous les pods sont sur le même node | Cluster multi-node (hors projet) |
 | Ollama hors du cluster     | Point unique de défaillance : s'il est arrêté, les générations échouent (503), sans que Kubernetes puisse le relancer | Hors projet (GPU dans le cluster) |
