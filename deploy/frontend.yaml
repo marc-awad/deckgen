@@ -9,9 +9,22 @@ metadata:
     app.kubernetes.io/name: frontend
     app.kubernetes.io/component: frontend
     app.kubernetes.io/part-of: deckgen
+  annotations:
+    # Shown by "kubectl rollout history": describes the version deployed by this revision
+    kubernetes.io/change-cause: "deckgen-frontend 0.2.0: version shown in the footer and in /version.json"
 spec:
   # Two pods: the site stays available while one of them is replaced
   replicas: 2
+  # Update one extra pod at a time, never below 2 ready pods: no capacity lost during an update
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  # A new pod must stay ready 5 s before it counts as available and the next step starts
+  minReadySeconds: 5
+  # Old ReplicaSets kept for "kubectl rollout undo"
+  revisionHistoryLimit: 5
   selector:
     matchLabels:
       app.kubernetes.io/name: frontend
@@ -23,6 +36,8 @@ spec:
         app.kubernetes.io/part-of: deckgen
     spec:
       enableServiceLinks: false
+      # 5 s of preStop + graceful nginx shutdown (current requests finish) + margin
+      terminationGracePeriodSeconds: 20
       # nginx user of the unprivileged image (uid and gid 101)
       securityContext:
         runAsNonRoot: true
@@ -32,7 +47,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: deckgen-frontend:0.1.0
+          image: deckgen-frontend:0.2.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -45,6 +60,12 @@ spec:
             # One nginx worker per CPU of the limit (1) instead of one per core of the machine (22)
             - name: NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE
               value: "1"
+          lifecycle:
+            # Keeps serving while the pod is removed from the Service endpoints; then the kubelet
+            # sends the image STOPSIGNAL, SIGQUIT: graceful nginx shutdown
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           # nginx starts in under a second: no startup probe needed.
           # /health is answered by nginx itself, without calling the api
           livenessProbe:
@@ -87,6 +108,9 @@ spec:
   # Opens port 30080 on the node, which Docker Desktop forwards to localhost.
   # Will be replaced by an Ingress at issue 17.
   type: NodePort
+  # All requests of a client go to the same pod: during a rolling update, index.html and the
+  # hashed assets it references come from the same version (otherwise: 404 on the JS file)
+  sessionAffinity: ClientIP
   selector:
     app.kubernetes.io/name: frontend
   ports:

@@ -9,10 +9,20 @@ metadata:
     app.kubernetes.io/name: generator
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: deckgen
+  annotations:
+    kubernetes.io/change-cause: "deckgen-generator 0.1.0: rolling update settings and preStop"
 spec:
   # Two pods: one can fail or be replaced while the other keeps serving.
   # No autoscaling: the heavy work is done by Ollama, outside the cluster.
   replicas: 2
+  # One extra pod at a time, never below 2 ready pods
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  minReadySeconds: 5
+  revisionHistoryLimit: 5
   selector:
     matchLabels:
       app.kubernetes.io/name: generator
@@ -24,6 +34,8 @@ spec:
         app.kubernetes.io/part-of: deckgen
     spec:
       enableServiceLinks: false
+      # 5 s of preStop + graceful uvicorn shutdown + margin
+      terminationGracePeriodSeconds: 20
       # Same user as the image (USER 10001:10001); the pod is refused if it would run as root
       securityContext:
         runAsNonRoot: true
@@ -45,6 +57,11 @@ spec:
               value: http://host.docker.internal:11434
             - name: OLLAMA_MODEL
               value: gemma3:4b
+          lifecycle:
+            # Keeps serving while the pod is removed from the Service endpoints, then SIGTERM
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           # /health never calls Ollama: these probes only check this process.
           # Startup: up to 30 s (15 x 2 s) to start before the liveness probe takes over
           startupProbe:

@@ -42,8 +42,13 @@ Construire les images, depuis la racine du dépôt :
 ```powershell
 docker build -t deckgen-api:0.1.1 ./api
 docker build -t deckgen-generator:0.1.0 ./generator
-docker build -t deckgen-frontend:0.1.0 ./frontend
+docker build --build-arg APP_VERSION=0.2.0 -t deckgen-frontend:0.2.0 ./frontend
 ```
+
+`APP_VERSION` est la version affichée en pied de page et dans `/version.json`. Une image publiée
+n'est jamais reconstruite avec le même tag : chaque modification reçoit un nouveau tag. C'est
+pourquoi `deckgen-frontend:0.1.0`, construite avant l'ajout de la version, n'est pas reconstruite
+(elle sert de version de départ pour la démonstration du rolling update).
 
 ## metrics-server (une seule fois par cluster)
 
@@ -132,6 +137,31 @@ Si PostgreSQL a été recréé (pod supprimé, `Recreate` après une modificatio
 (stockage `emptyDir`) : relancer l'api pour réappliquer les migrations,
 `kubectl rollout restart deployment api -n deckgen`. Ce sera inutile avec le volume persistant
 de l'issue 16.
+
+## Mettre à jour et revenir en arrière
+
+Frontend, api et generator sont mis à jour par rolling update (un pod de plus à la fois, jamais
+moins de pods prêts) ; détails et démonstration : [docs/rolling-update.md](../docs/rolling-update.md).
+
+```powershell
+# Modifier l'image (et kubernetes.io/change-cause) dans le manifeste, puis :
+kubectl apply -f deploy/frontend.yaml
+kubectl rollout status deployment/frontend -n deckgen      # suit le remplacement des pods
+
+kubectl rollout history deployment/frontend -n deckgen     # révisions et change-cause
+kubectl rollout history deployment/frontend -n deckgen --revision=<n>   # détail d'une révision
+
+kubectl rollout undo deployment/frontend -n deckgen        # retour à la révision précédente
+kubectl rollout undo deployment/frontend -n deckgen --to-revision=<n>
+kubectl rollout status deployment/frontend -n deckgen
+
+kubectl diff -f deploy/frontend.yaml                       # écart entre le fichier et le cluster
+curl.exe http://localhost:30080/version.json               # version servie (0.2.0 et suivantes)
+```
+
+Après un `rollout undo`, le cluster ne correspond plus au fichier : le prochain
+`kubectl apply -f deploy/` redéploierait la version retirée. Il faut remettre la bonne image dans
+le manifeste (commit) avant tout nouvel `apply`.
 
 ## Supprimer
 

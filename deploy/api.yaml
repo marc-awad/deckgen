@@ -9,9 +9,19 @@ metadata:
     app.kubernetes.io/name: api
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: deckgen
+  annotations:
+    kubernetes.io/change-cause: "deckgen-api 0.1.1: migration lock, request log, rolling update settings"
 spec:
   # No "replicas" field: the HorizontalPodAutoscaler sets it. With a value here, each
   # "kubectl apply" would reset the number of pods chosen by the HPA.
+  # One extra pod at a time, never fewer ready pods than before the update
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  minReadySeconds: 5
+  revisionHistoryLimit: 5
   selector:
     matchLabels:
       app.kubernetes.io/name: api
@@ -23,6 +33,8 @@ spec:
         app.kubernetes.io/part-of: deckgen
     spec:
       enableServiceLinks: false
+      # 5 s of preStop + 10 s of graceful shutdown in the api (SHUTDOWN_TIMEOUT_MS) + margin
+      terminationGracePeriodSeconds: 20
       # "node" user of the image (USER 1000:1000)
       securityContext:
         runAsNonRoot: true
@@ -82,6 +94,11 @@ spec:
                 secretKeyRef:
                   name: postgres-credentials
                   key: POSTGRES_DB
+          lifecycle:
+            # Keeps serving while the pod is removed from the Service endpoints, then SIGTERM
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           # The server listens only after the migrations: up to 60 s (30 x 2 s) to get there
           startupProbe:
             httpGet:

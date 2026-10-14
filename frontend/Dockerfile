@@ -11,13 +11,21 @@ RUN npm ci
 COPY index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json ./
 COPY public ./public
 COPY src ./src
+
+# Version shown in the footer and in /version.json: docker build --build-arg APP_VERSION=0.2.0
+# Declared after npm ci, so that a new version does not invalidate the dependency layer
+ARG APP_VERSION=dev
+ENV VITE_APP_VERSION=$APP_VERSION
 RUN npm run build
 
 
 # ---- Final stage: nginx serves the static files and forwards /api to the api ----
 FROM nginxinc/nginx-unprivileged:1.30.5-alpine3.24
 
-LABEL org.opencontainers.image.title="deckgen-frontend" \
+# An ARG only exists in the stage that declares it: declared again for the label
+ARG APP_VERSION=dev
+LABEL org.opencontainers.image.version="$APP_VERSION" \
+      org.opencontainers.image.title="deckgen-frontend" \
       org.opencontainers.image.description="deckgen web interface served by nginx, with /api forwarded to the api" \
       org.opencontainers.image.source="https://github.com/marc-awad/deckgen"
 
