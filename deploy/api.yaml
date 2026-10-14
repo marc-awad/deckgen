@@ -1,5 +1,5 @@
 # REST API: decks and cards in PostgreSQL, calls the generator.
-# Reachable inside the cluster as api:3000.
+# Reachable inside the cluster as api:3000. Number of pods managed by the HPA below (2 to 5).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,7 +10,8 @@ metadata:
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: deckgen
 spec:
-  replicas: 1
+  # No "replicas" field: the HorizontalPodAutoscaler sets it. With a value here, each
+  # "kubectl apply" would reset the number of pods chosen by the HPA.
   selector:
     matchLabels:
       app.kubernetes.io/name: api
@@ -29,9 +30,33 @@ spec:
         runAsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      # Runs to completion before the api container starts: waits until PostgreSQL accepts
+      # connections, so that the api does not start, fail and restart
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:18.6-alpine3.24
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - until pg_isready -h postgres -p 5432; do echo "waiting for postgres"; sleep 2; done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+          securityContext:
+            # "postgres" user of the image: pg_isready needs a user name, uid 1000 has none here
+            runAsUser: 70
+            runAsGroup: 70
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
       containers:
         - name: api
-          image: deckgen-api:0.1.0
+          image: deckgen-api:0.1.1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -57,7 +82,38 @@ spec:
                 secretKeyRef:
                   name: postgres-credentials
                   key: POSTGRES_DB
-          # Probes and resources: issue 13
+          # The server listens only after the migrations: up to 60 s (30 x 2 s) to get there
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+          # /health does not touch the database: a database outage must not restart the api
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # /ready runs SELECT 1: without database, the pod leaves the Service but keeps running
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          # Measured: 1m CPU / 33Mi idle, up to 800m / 98Mi under a request burst
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -80,3 +136,29 @@ spec:
     - name: http
       port: 3000
       targetPort: http
+---
+# Adds api pods when their average CPU exceeds 70% of the request (70m of 100m),
+# removes them when the load drops. Needs metrics-server (deploy/cluster/).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

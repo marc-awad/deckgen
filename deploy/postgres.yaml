@@ -10,6 +10,7 @@ metadata:
     app.kubernetes.io/component: database
     app.kubernetes.io/part-of: deckgen
 spec:
+  # A single instance: PostgreSQL does not share its data folder between processes
   replicas: 1
   # The old pod is stopped before the new one starts: two pods must never write the same data
   strategy:
@@ -51,7 +52,31 @@ spec:
                 secretKeyRef:
                   name: postgres-credentials
                   key: POSTGRES_DB
-          # Probes and resources: issue 13
+          # Over TCP (-h 127.0.0.1): during the first start the image runs a temporary server
+          # on a Unix socket only, which must not be taken for the real one
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            # The first start initializes the database (initdb) before listening
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          # requests = limits: QoS class Guaranteed, the last pod evicted if the node lacks memory.
+          # Measured: 1m CPU / 106Mi idle, 410m / 115Mi under load
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           volumeMounts:
             # PostgreSQL 18 stores its data in a versioned subfolder of /var/lib/postgresql
             - name: data

@@ -1,15 +1,17 @@
 # Déploiement Kubernetes
 
 Ce dossier contient les manifestes Kubernetes de deckgen : un Deployment et un Service par
-service, dans le namespace `deckgen`. Explications détaillées : [docs/kubernetes.md](../docs/kubernetes.md).
+service, dans le namespace `deckgen`, et un HorizontalPodAutoscaler pour l'api. Explications
+détaillées : [docs/kubernetes.md](../docs/kubernetes.md).
 
-| Fichier             | Contenu                                                         |
-|---------------------|-----------------------------------------------------------------|
-| `00-namespace.yaml` | Namespace `deckgen` (préfixe `00-` : appliqué en premier)        |
-| `postgres.yaml`     | Deployment (stratégie `Recreate`) et Service ClusterIP `postgres:5432` |
-| `generator.yaml`    | Deployment et Service ClusterIP `generator:8000`                |
-| `api.yaml`          | Deployment et Service ClusterIP `api:3000`                      |
-| `frontend.yaml`     | Deployment et Service NodePort `30080`                          |
+| Fichier                      | Contenu                                                         |
+|------------------------------|-----------------------------------------------------------------|
+| `00-namespace.yaml`          | Namespace `deckgen` (préfixe `00-` : appliqué en premier)        |
+| `postgres.yaml`              | Deployment (1 pod, stratégie `Recreate`) et Service ClusterIP `postgres:5432` |
+| `generator.yaml`             | Deployment (2 pods) et Service ClusterIP `generator:8000`       |
+| `api.yaml`                   | Deployment (2 à 5 pods), Service ClusterIP `api:3000` et HPA    |
+| `frontend.yaml`              | Deployment (2 pods) et Service NodePort `30080`                 |
+| `cluster/metrics-server.yaml`| metrics-server v0.9.0, composant du cluster (installé une fois) |
 
 ## Prérequis
 
@@ -33,19 +35,38 @@ Pour qu'une image locale soit utilisée, le pod ne doit pas chercher à la tél�
 
 - avec le tag `latest`, la politique par défaut est `Always` : Kubernetes tente un téléchargement
   et échoue
-- les manifestes utilisent donc un tag précis (`0.1.0`) et `imagePullPolicy: IfNotPresent`
+- les manifestes utilisent donc un tag précis et `imagePullPolicy: IfNotPresent`
 
 Construire les images, depuis la racine du dépôt :
 
 ```powershell
-docker build -t deckgen-api:0.1.0 ./api
+docker build -t deckgen-api:0.1.1 ./api
 docker build -t deckgen-generator:0.1.0 ./generator
 docker build -t deckgen-frontend:0.1.0 ./frontend
 ```
 
+## metrics-server (une seule fois par cluster)
+
+metrics-server mesure la consommation CPU et mémoire des pods. Il est nécessaire au
+HorizontalPodAutoscaler de l'api et à `kubectl top`. C'est un composant du cluster (namespace
+`kube-system`), pas de l'application : il est dans `deploy/cluster/`, un sous-dossier que
+`kubectl apply -f deploy/` ne lit pas (la commande n'est pas récursive).
+
+```powershell
+kubectl apply -f deploy/cluster/metrics-server.yaml
+kubectl rollout status -n kube-system deployment/metrics-server
+kubectl top nodes        # répond après environ une minute
+```
+
+Le fichier est le manifeste officiel de la v0.9.0, avec une seule option ajoutée,
+`--kubelet-insecure-tls` : sur Docker Desktop, le certificat du kubelet est auto-signé et ne
+contient pas l'adresse IP du node, metrics-server ne peut donc pas le vérifier (« x509: cannot
+validate certificate for 192.168.65.3 because it doesn't contain any IP SANs »). Cette option est
+réservée à un cluster local.
+
 ## Déployer
 
-### 1. Namespace et Secret (une seule fois, avant le premier déploiement)
+### 1. Namespace et Secret (avant le premier déploiement)
 
 Le mot de passe de PostgreSQL n'est écrit dans aucun fichier : le Secret est créé à la main,
 avec un mot de passe aléatoire. Le Secret vit dans le namespace `deckgen`, qui doit donc exister
@@ -70,6 +91,12 @@ Pour fixer soi-même le mot de passe, remplacer `$password` par la valeur voulue
 (`--from-literal=POSTGRES_PASSWORD=<mot-de-passe>`). Vérification sans afficher les valeurs :
 `kubectl describe secret postgres-credentials -n deckgen`.
 
+Ces commandes sont à **relancer après chaque `kubectl delete namespace deckgen`**, qui supprime
+aussi le Secret. Pour remplacer le Secret dans un namespace existant :
+`kubectl delete secret postgres-credentials -n deckgen`, puis la commande `kubectl create secret`
+ci-dessus, puis `kubectl rollout restart deployment -n deckgen` pour que les pods relisent les
+valeurs (avec `emptyDir`, la base est alors recréée avec le nouveau mot de passe).
+
 ### 2. Appliquer les manifestes
 
 ```powershell
@@ -78,20 +105,33 @@ kubectl apply -f deploy/
 ```
 
 `kubectl apply` traite les fichiers par ordre alphabétique, d'où le préfixe `00-` du namespace.
-Relancer la commande ne change rien si les fichiers n'ont pas changé (`unchanged`).
+L'ordre de démarrage n'a pas d'importance : l'initContainer de l'api attend que PostgreSQL
+accepte les connexions avant de lancer l'api. Relancer la commande ne change rien si les
+fichiers n'ont pas changé (`unchanged`).
 
-Au premier démarrage, l'api peut redémarrer une fois : elle démarre avant que PostgreSQL accepte
-les connexions, s'arrête (code 1) et Kubernetes la relance.
+Le Deployment de l'api n'a pas de champ `replicas` : c'est le HPA qui fixe le nombre de pods. Au
+premier déploiement, l'api démarre donc avec 1 pod, puis le HPA passe à 2 (le minimum) en moins
+d'une minute.
 
 ## Vérifier
 
 ```powershell
-kubectl get all -n deckgen                  # 4 pods Running, 4 Services, 4 Deployments
-kubectl get endpointslices -n deckgen       # l'adresse du pod derrière chaque Service
-kubectl logs -n deckgen deploy/api          # logs d'un service
+kubectl get pods -n deckgen                 # tous Ready (1/1), RESTARTS 0
+kubectl get hpa -n deckgen                  # CPU actuel / cible, nombre de pods de l'api
+kubectl top pods -n deckgen                 # consommation réelle (metrics-server)
+kubectl get endpointslices -n deckgen       # les pods derrière chaque Service
+kubectl logs -n deckgen deploy/api -c api   # logs de l'api (un pod au hasard)
+kubectl logs -n deckgen <pod-api> -c wait-for-postgres   # attente de PostgreSQL au démarrage
+kubectl describe pod -n deckgen <pod>       # événements : probes en échec, redémarrages
+kubectl get pods -n deckgen -o custom-columns=POD:.metadata.name,QOS:.status.qosClass
 ```
 
 Puis ouvrir **http://localhost:30080**.
+
+Si PostgreSQL a été recréé (pod supprimé, `Recreate` après une modification), sa base est vide
+(stockage `emptyDir`) : relancer l'api pour réappliquer les migrations,
+`kubectl rollout restart deployment api -n deckgen`. Ce sera inutile avec le volume persistant
+de l'issue 16.
 
 ## Supprimer
 
@@ -100,8 +140,9 @@ kubectl delete namespace deckgen
 ```
 
 Cette commande supprime toutes les ressources du namespace, Secret compris : il faudra le recréer
-(étape 1) avant un nouveau déploiement. Les données de PostgreSQL sont perdues (stockage
-provisoire `emptyDir`, remplacé par un PersistentVolumeClaim à l'issue 16).
+(étape 1) avant un nouveau déploiement. Les données de PostgreSQL sont perdues. metrics-server,
+dans `kube-system`, n'est pas concerné (`kubectl delete -f deploy/cluster/metrics-server.yaml`
+pour le retirer).
 
 ## Test rapide du cluster
 
