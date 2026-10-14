@@ -63,6 +63,11 @@ server {
         add_header Cache-Control "no-cache";
     }
 
+    # Version of the deployed build ({"version": "..."}), always checked again as well
+    location = /version.json {
+        add_header Cache-Control "no-cache";
+    }
+
     # SPA fallback: /decks/3 is not a file, React Router displays the page from index.html
     location / {
         try_files $uri $uri/ /index.html;

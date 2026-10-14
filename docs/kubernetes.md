@@ -5,6 +5,8 @@ manifestes sont dans [deploy/](../deploy/) : un Deployment et un Service par ser
 namespace `deckgen`, plus un HorizontalPodAutoscaler pour l'api. Ollama n'est pas dans le
 cluster : il tourne sur Windows et utilise le GPU directement. metrics-server, composant du
 cluster nécessaire au HPA et à `kubectl top`, est décrit dans [deploy/cluster/](../deploy/cluster/).
+Les mises à jour sans interruption et le retour arrière sont décrits dans
+[rolling-update.md](rolling-update.md).
 
 ## Ressources
 

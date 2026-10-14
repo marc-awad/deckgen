@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
+import { APP_VERSION } from "../version";
 
 // Message passed between pages, e.g. navigate("/", { state: { notice: "Deck supprimé." } })
 function readNotice(state: unknown): string | null {
@@ -54,6 +55,10 @@ export function Layout() {
         </div>
         <Outlet />
       </main>
+
+      <footer className="mx-auto max-w-3xl px-4 pb-6 text-xs text-slate-500">
+        deckgen v{APP_VERSION}
+      </footer>
     </div>
   );
 }
