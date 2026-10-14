@@ -1,0 +1,8 @@
+# Every deckgen resource lives in this namespace:
+# "kubectl delete namespace deckgen" removes the whole application.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deckgen
+  labels:
+    app.kubernetes.io/part-of: deckgen

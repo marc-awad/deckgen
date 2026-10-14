@@ -1,0 +1,82 @@
+# PostgreSQL: one pod, reachable inside the cluster as postgres:5432.
+# Credentials come from the Secret postgres-credentials (see README.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: deckgen
+spec:
+  replicas: 1
+  # The old pod is stopped before the new one starts: two pods must never write the same data
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: deckgen
+    spec:
+      # No variables injected for the other Services (e.g. POSTGRES_PORT=tcp://...)
+      enableServiceLinks: false
+      # No runAsNonRoot: the official image starts as root to prepare the data folder,
+      # then runs PostgreSQL as its "postgres" user
+      containers:
+        - name: postgres
+          image: postgres:18.6-alpine3.24
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_DB
+          # Probes and resources: issue 13
+          volumeMounts:
+            # PostgreSQL 18 stores its data in a versioned subfolder of /var/lib/postgresql
+            - name: data
+              mountPath: /var/lib/postgresql
+      volumes:
+        # Temporary: an emptyDir is deleted with the pod, and the data with it.
+        # Replaced by a PersistentVolumeClaim at issue 16.
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: deckgen
+spec:
+  # Internal address only: postgres.deckgen.svc.cluster.local
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

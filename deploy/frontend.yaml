@@ -1,0 +1,69 @@
+# Frontend: nginx serves the React app and forwards /api/ to the api.
+# Reachable from the machine at http://localhost:30080 (NodePort).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: frontend
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: deckgen
+    spec:
+      enableServiceLinks: false
+      # nginx user of the unprivileged image (uid and gid 101)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: deckgen-frontend:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Full DNS name: the nginx resolver ignores the search domains of /etc/resolv.conf,
+            # so the short name "api" would not be found
+            - name: API_UPSTREAM
+              value: api.deckgen.svc.cluster.local:3000
+          # Probes and resources: issue 13
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  # Opens port 30080 on the node, which Docker Desktop forwards to localhost.
+  # Will be replaced by an Ingress at issue 17.
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30080

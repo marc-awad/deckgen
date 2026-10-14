@@ -1,0 +1,68 @@
+# Generator: turns a course into flashcards with the Ollama of the Windows host (GPU).
+# Reachable inside the cluster as generator:8000.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: generator
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: generator
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: generator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: generator
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: deckgen
+    spec:
+      enableServiceLinks: false
+      # Same user as the image (USER 10001:10001); the pod is refused if it would run as root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: generator
+          image: deckgen-generator:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          # Plain values for now, moved to a ConfigMap at issue 15
+          env:
+            # Ollama runs on Windows and uses the GPU directly
+            - name: OLLAMA_URL
+              value: http://host.docker.internal:11434
+            - name: OLLAMA_MODEL
+              value: gemma3:4b
+          # Probes and resources: issue 13
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: generator
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: generator
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: generator
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
