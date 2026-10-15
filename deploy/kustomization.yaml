@@ -14,15 +14,15 @@ resources:
 - frontend.yaml
 - ingress.yaml
 images:
-- digest: sha256:eff064f70c1272c3758f85773100904d6eea66eec2fb17827f4bb72b79bddfe4
+- digest: sha256:462866e080aedc6f864bf943f717dcb1ddc7a5abec66497c3f3a84e7b630f437
   name: deckgen-api
   newName: ghcr.io/marc-awad/deckgen-api
-  newTag: 1.0.0-rc.1
-- digest: sha256:5c7597ddbb463bfcb0f07248f234848331e14b0a3fe9931c0b2308f044e15f08
+  newTag: 1.0.0
+- digest: sha256:64bda42ca1cafb847142ef5c6c2d805fb1c36d5fa9055ee41599eed34e546663
   name: deckgen-frontend
   newName: ghcr.io/marc-awad/deckgen-frontend
-  newTag: 1.0.0-rc.1
-- digest: sha256:805c9b7406eeb0b2d7976cbcf9c97b86fafd2b9dfd4e00b5afccf1ff670daf6f
+  newTag: 1.0.0
+- digest: sha256:f596fbbd8ed7aab04c63c4cce677c8383296678f7dd60c48940e15b45a614ec0
   name: deckgen-generator
   newName: ghcr.io/marc-awad/deckgen-generator
-  newTag: 1.0.0-rc.1
+  newTag: 1.0.0
