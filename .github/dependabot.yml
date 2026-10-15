@@ -37,6 +37,18 @@ updates:
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Vitest 5 requires Node 22: the project must stay compatible with Node 20
+      - dependency-name: vitest
+        update-types: [version-update:semver-major]
+      - dependency-name: "@vitest/coverage-v8"
+        update-types: [version-update:semver-major]
+      # React Router 8 requires Node 22
+      - dependency-name: react-router
+        update-types: [version-update:semver-major]
+      # Kept on Node 20 types: the typecheck reports any API missing from Node 20
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: pip
     directory: /generator
@@ -75,3 +87,6 @@ updates:
         update-types: [version-update:semver-major]
       - dependency-name: python
         update-types: [version-update:semver-major, version-update:semver-minor]
+      # Stays on the stable branch 1.30 of nginx (odd numbers are the mainline branch)
+      - dependency-name: nginxinc/nginx-unprivileged
+        update-types: [version-update:semver-minor]
