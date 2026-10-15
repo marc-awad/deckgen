@@ -1,0 +1,54 @@
+# Argo CD Application: deploys the deploy/ folder of the production branch into the cluster.
+# Applied once, after Argo CD (deploy/cluster/argocd-values.yaml):
+#   kubectl apply -f deploy/cluster/argocd-application.yaml
+# The production branch is written only by the deploy job of .github/workflows/release.yml.
+# Explained in docs/cd.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: deckgen
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: deckgen
+  # No resources-finalizer: deleting this Application leaves the application running
+  # (with the finalizer, Argo CD would delete every resource, namespace included)
+spec:
+  project: default
+  source:
+    # Public repository: read without credentials
+    repoURL: https://github.com/marc-awad/deckgen.git
+    targetRevision: production
+    # Contains kustomization.yaml: Argo CD renders it with kustomize, like "kubectl apply -k"
+    path: deploy
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: deckgen
+  syncPolicy:
+    automated:
+      # Deletes the resources removed from Git (only those Argo CD manages: see docs/cd.md)
+      prune: true
+      # Puts back any manual change made in the cluster (kubectl edit, apply, scale...)
+      selfHeal: true
+    syncOptions:
+      # The fields of ignoreDifferences below are also left alone when syncing, not only in
+      # the comparison
+      - RespectIgnoreDifferences=true
+      # Only the resources that differ from Git are applied
+      - ApplyOutOfSyncOnly=true
+      # Deletions happen last, once everything else is synced and healthy
+      - PruneLast=true
+    # A failed sync (e.g. image not yet pullable) is retried: 5 s, 10 s, 20 s... up to 3 min
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  ignoreDifferences:
+    # The HorizontalPodAutoscaler sets the number of api pods: it must never be put back
+    - group: apps
+      kind: Deployment
+      name: api
+      namespace: deckgen
+      jsonPointers:
+        - /spec/replicas

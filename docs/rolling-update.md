@@ -220,7 +220,7 @@ démonstration :
 Le dépôt ne décrit plus ce qui tourne. kubectl le signale lors de l'undo (« Rolling back will not
 update the kubectl.kubernetes.io/last-applied-configuration annotation »), et
 `kubectl diff -f deploy/frontend.yaml` affiche la différence. Le prochain
-`kubectl apply -f deploy/` redéploierait la 0.2.0, peut-être celle qu'on venait de retirer parce
+`kubectl apply -k deploy/` redéploierait la 0.2.0, peut-être celle qu'on venait de retirer parce
 qu'elle posait problème.
 
 En pratique, le rollback est une mesure d'urgence, suivie immédiatement d'une correction dans
@@ -228,3 +228,13 @@ Git : on remet `image: deckgen-frontend:0.1.0` (et la change-cause) dans le mani
 commit et une revue, puis `kubectl apply`. Avec un outil GitOps (Argo CD, Flux), le cluster est
 synchronisé en permanence sur Git : un undo manuel serait même annulé automatiquement, et le
 rollback se fait en revenant sur le commit (`git revert`).
+
+## Depuis Argo CD (issue 19)
+
+Le namespace `deckgen` est maintenant géré par Argo CD, avec `selfHeal` : la démonstration
+ci-dessus décrit le mécanisme de Kubernetes, toujours utilisé à chaque mise à jour, mais ce n'est
+plus kubectl qui la déclenche. Une nouvelle version arrive par un tag Git, et Argo CD applique la
+branche `production` ; le rolling update qui suit est le même (maxSurge 1, maxUnavailable 0,
+preStop). Un `kubectl rollout undo` serait annulé par Argo CD en quelques secondes : le retour
+arrière se fait par un `git revert` sur la branche `production`
+([release.md](release.md#retour-arrière)).
