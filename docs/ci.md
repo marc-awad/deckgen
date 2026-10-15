@@ -286,9 +286,24 @@ jour, vers `develop` (comme une branche de fonctionnalité) :
 - **`cooldown: default-days: 7`** : une version n'est proposée qu'une fois âgée de 7 jours. Une
   release piégée, comme celle de Trivy en mars 2026, est en général découverte et retirée en
   quelques heures.
-- **`ignore`** pour Docker : Node reste en 24 (LTS) et Python en 3.13. Changer de version du
-  langage est une décision volontaire, qui touche aussi la matrice de la CI ; pour Dependabot,
-  Python 3.14 est une version « mineure », d'où les deux règles.
+- **`ignore`** : mises à jour que Dependabot ne propose pas, chacune avec sa raison en
+  commentaire dans le fichier :
+
+  | Écosystème | Dépendance | Ignoré | Raison |
+  |------------|------------|--------|--------|
+  | npm | `vitest`, `@vitest/coverage-v8` | Majeures | Vitest 5 exige Node 22 (`^22.12.0 \|\| ^24.0.0 \|\| >=26.0.0`) : le projet doit rester compatible Node 20, première version de la matrice |
+  | npm | `react-router` | Majeures | React Router 8 exige Node 22 (`>=22.22.0`) |
+  | npm | `@types/node` | Majeures | Types fixés sur Node 20 : le typecheck signale tout appel à une API absente de Node 20, même si le code tourne en Node 24 dans l'image |
+  | docker | `node` | Majeures | Node reste en 24 (LTS), version de l'image et de la matrice |
+  | docker | `python` | Majeures et mineures | Python reste en 3.13 ; pour Dependabot, 3.14 est une version « mineure » |
+  | docker | `nginxinc/nginx-unprivileged` | Mineures | nginx reste sur la branche stable 1.30 ; les numéros impairs (1.31) sont la branche mainline |
+
+  Les mises à jour mineures et les correctifs de ces paquets restent proposés (par exemple
+  vitest 4.x, nginx 1.30.x). Les règles npm valent pour les deux dossiers : une règle sur un
+  paquet absent d'un dossier est sans effet (`@vitest/coverage-v8` n'est que dans l'api,
+  `react-router` que dans le frontend). Passer à la version suivante (Node 22 minimum, nginx 1.32
+  stable) reste une décision volontaire : on retire alors la règle, et on met à jour la matrice de
+  la CI si besoin.
 - **`commit-message`** : `chore(deps): ...` et `chore(deps-dev): ...`, dans le format de commit du
   projet.
 - Chaque PR de Dependabot passe par la CI comme les autres : une mise à jour qui casse un test ou
