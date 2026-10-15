@@ -1,6 +1,7 @@
 # deckgen
 
 [![CI](https://github.com/marc-awad/deckgen/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/marc-awad/deckgen/actions/workflows/ci.yml?query=branch%3Adevelop)
+[![Release](https://github.com/marc-awad/deckgen/actions/workflows/release.yml/badge.svg)](https://github.com/marc-awad/deckgen/actions/workflows/release.yml)
 
 Générateur de flashcards par IA : collez un cours, obtenez des cartes prêtes à importer dans Anki.
 
@@ -65,5 +66,9 @@ Linux et macOS, le séparateur est `:` au lieu de `;`. Pour vérifier pendant un
 - [docs/docker-images.md](docs/docker-images.md) : Dockerfiles et tailles des images
 - [docs/model-choice.md](docs/model-choice.md) : choix du modèle de langage
 - [docs/ci.md](docs/ci.md) : intégration continue (GitHub Actions), scan Trivy, Dependabot
+- [docs/cd.md](docs/cd.md) : livraison et déploiement continus (GHCR, branche production, Argo CD)
+- [docs/release.md](docs/release.md) : processus de release (versions, tags, retour arrière)
+- [docs/kubernetes.md](docs/kubernetes.md) et [deploy/README.md](deploy/README.md) : déploiement
+  Kubernetes (manifestes, Traefik, Argo CD)
 - README de chaque service : [api](api/README.md), [generator](generator/README.md),
   [frontend](frontend/README.md) (développement local sans Docker, tests)

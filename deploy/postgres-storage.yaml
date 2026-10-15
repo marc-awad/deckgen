@@ -1,6 +1,6 @@
 # Storage of PostgreSQL: a PersistentVolume (cluster resource, no namespace) and the
-# PersistentVolumeClaim of the postgres Deployment. Sorted before postgres.yaml by
-# "kubectl apply -f deploy/" ("-" comes before "."), so the claim exists before the pod.
+# PersistentVolumeClaim of the postgres Deployment. Kustomize sorts the objects by kind
+# ("kubectl apply -k deploy/"): volume and claim come before the Deployments.
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -10,6 +10,9 @@ metadata:
     app.kubernetes.io/name: postgres
     app.kubernetes.io/component: database
     app.kubernetes.io/part-of: deckgen
+  annotations:
+    # Argo CD never deletes the volume of the database (see 00-namespace.yaml)
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   capacity:
     storage: 1Gi
@@ -36,6 +39,8 @@ metadata:
     app.kubernetes.io/name: postgres
     app.kubernetes.io/component: database
     app.kubernetes.io/part-of: deckgen
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   accessModes:
     - ReadWriteOnce

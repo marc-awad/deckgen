@@ -1,7 +1,7 @@
 # Single entry point of the application: Traefik (deploy/cluster/traefik-values.yaml), port 80.
 #   http://deckgen.local      (hosts file, see README.md)
 #   http://deckgen.localhost  (fallback: browsers resolve *.localhost to 127.0.0.1 by themselves)
-# Middleware is a Traefik resource (CRD): Traefik must be installed before "kubectl apply -f deploy/".
+# Middleware is a Traefik resource (CRD): Traefik must be installed before "kubectl apply -k deploy/".
 
 # Removes /api before forwarding to the api, like nginx does in the frontend: /api/decks -> /decks
 apiVersion: traefik.io/v1alpha1

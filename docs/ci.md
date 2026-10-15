@@ -3,7 +3,9 @@
 Chaque push sur `develop` et chaque pull request vers `develop` ou `main` lance le workflow
 [.github/workflows/ci.yml](../.github/workflows/ci.yml) : lint, tests, validation de la
 configuration, construction des trois images et scan de sécurité. Rien n'est publié ni déployé :
-la livraison continue (push des images sur tag) est l'objet de l'issue 19.
+la livraison continue (publication des images et déploiement sur tag) est faite par
+[release.yml](../.github/workflows/release.yml), décrite dans [cd.md](cd.md) ; la procédure de
+release est dans [release.md](release.md).
 
 ## Pipeline
 
@@ -15,7 +17,7 @@ flowchart LR
         gen[generator<br/>Python 3.13<br/>ruff, pytest]
         api[api<br/>node 20.19 et 24<br/>lint, typecheck, test]
         front[frontend<br/>node 20.19 et 24<br/>lint, typecheck, test, build]
-        conf[config<br/>docker compose config<br/>kubeconform]
+        conf[config<br/>docker compose config<br/>kustomize build, kubeconform]
     end
 
     subgraph imgs [images, une par service]
@@ -41,7 +43,7 @@ code qui passe le lint et les tests.
 | `generator` | Python 3.13 (comme l'image `python:3.13.x-slim-trixie`), `pip install -r requirements-dev.txt`, `ruff check`, `ruff format --check`, `pytest` (avec couverture) | Erreurs de code et de style, régressions du service Python |
 | `api (node …)` | `npm ci`, `npm run lint` (ESLint), `npm run typecheck` (tsc sans émission), `npm test` (Vitest, PostgreSQL en mémoire avec PGlite) | Erreurs de types, régressions des routes et de la base |
 | `frontend (node …)` | `npm ci`, lint, typecheck, `npm test`, `npm run build` (tsc puis Vite) | Même chose, plus la construction réelle du site |
-| `config` | `docker compose config` (avec et sans `docker-compose.gpu.yml`), kubeconform sur `deploy/*.yaml` | Fichier compose invalide, manifeste Kubernetes mal écrit |
+| `config` | `docker compose config` (avec et sans `docker-compose.gpu.yml`), contrôle de `deploy/kustomization.yaml`, kubeconform sur la sortie de `kustomize build deploy/` | Fichier compose invalide, manifeste Kubernetes mal écrit ou oublié dans Kustomize |
 | `images (…)` | Build de l'image, scan Trivy (rapport, SARIF, règle d'échec) | Dockerfile cassé, vulnérabilité critique corrigeable |
 
 Aucun test n'a besoin d'un service externe : l'api utilise PGlite et un faux generator, le
@@ -59,12 +61,25 @@ l'image.
 plus `docker-compose.gpu.yml`). `--quiet` n'affiche rien si tout est correct, et ne montre donc
 pas les valeurs, même d'exemple.
 
-### Validation des manifestes avec kubeconform
+### Validation des manifestes avec Kustomize et kubeconform
 
-kubeconform compare chaque objet de `deploy/*.yaml` au schéma JSON de son type, pour la version
-exacte du cluster (`-kubernetes-version 1.36.1`), sans cluster. `-strict` refuse en plus les
-champs inconnus : une faute de frappe comme `replica: 2` est une erreur, alors que Kubernetes
-l'ignorerait sans rien dire.
+Depuis l'issue 19, les manifestes sont appliqués par Kustomize (`kubectl apply -k deploy/`, et
+Argo CD sur la branche `production`). Le job valide donc ce qui sera réellement appliqué : la
+sortie de `kustomize build deploy/`, et non les fichiers un par un. `deploy/*.yaml` contient en
+plus `kustomization.yaml`, qui n'est pas une ressource Kubernetes : kubeconform le rejetterait.
+
+1. **Contrôle de la liste** : chaque `deploy/*.yaml` (sauf `kustomization.yaml`) doit figurer
+   dans les `resources` de `kustomization.yaml`. Un nouveau manifeste oublié dans la liste ne
+   serait jamais déployé, sans aucune erreur. Vérifié en local : un fichier `forgotten.yaml`
+   ajouté à une copie fait échouer le job (« forgotten.yaml is not listed »).
+2. **`kustomize build deploy/`** : kustomize **v5.8.2**, téléchargé avec vérification de sa somme
+   SHA-256 (même version et même somme que le job de déploiement de `release.yml`).
+3. **kubeconform** sur cette sortie.
+
+kubeconform compare chaque objet au schéma JSON de son type, pour la version exacte du cluster
+(`-kubernetes-version 1.36.1`), sans cluster. `-strict` refuse en plus les champs inconnus : une
+faute de frappe comme `replica: 2` est une erreur, alors que Kubernetes l'ignorerait sans rien
+dire.
 
 Version précise : **v0.8.0**, téléchargée depuis la release GitHub, avec vérification de la
 somme SHA-256 écrite dans le workflow (la même que dans le fichier `CHECKSUMS` de la release).
@@ -85,12 +100,13 @@ Les Middlewares restent vérifiés par le serveur au moment de l'apply (dry-run)
 aussi en CI, on pourrait ajouter une source de schémas de CRD (catalogue datreeio/CRDs-catalog,
 épinglé sur un commit).
 
-Seuls les fichiers `deploy/*.yaml` sont validés : `deploy/cluster/traefik-values.yaml` est un
-fichier de valeurs Helm, pas un manifeste, et `postgres-credentials.yaml.example` n'a pas
-l'extension `.yaml`.
+Seuls les fichiers listés dans `kustomization.yaml` sont validés : `deploy/cluster/` contient des
+composants du cluster (valeurs Helm, Application Argo CD), et `postgres-credentials.yaml.example`
+n'est qu'un modèle, jamais appliqué.
 
-Résultat local : `19 resources found in 7 files - Valid: 17, Invalid: 0, Errors: 0, Skipped: 2`
-(les deux Middlewares).
+Résultat local (job rejoué dans `ubuntu:24.04`, scripts extraits du workflow par yq) :
+`19 resources found in 1 file - Valid: 17, Invalid: 0, Errors: 0, Skipped: 2` (les deux
+Middlewares).
 
 ### Construction des images
 
@@ -367,6 +383,7 @@ Avant le premier push :
 | Jobs `api` et `frontend`, Node 20.19.0 | npm ci, lint, typecheck, test, build | OK : api 67 tests, frontend 26 tests, build OK |
 | Jobs `api` et `frontend`, Node 24.21.0 | Mêmes commandes, dans `node:24.21.0-alpine3.24` | OK |
 | Job `config` | `docker compose config --quiet` (avec `--env-file .env.example`, sans toucher au `.env` local), kubeconform v0.8.0 | OK, 17 valides, 2 Middlewares ignorés |
+| Job `config` (issue 19) | Étapes extraites de `ci.yml` par yq 4.54.1, rejouées dans `ubuntu:24.04` : kustomize v5.8.2, contrôle de la liste, kubeconform sur `kustomize build` | OK, 17 valides, 2 Middlewares ignorés ; un manifeste non listé fait échouer le job |
 | Job `images` | `docker buildx build` des trois images, Trivy 0.75.0 (rapport, SARIF, règle d'échec) | Builds OK, règle d'échec : 0 CRITICAL corrigeable |
 
 Ce qui ne peut se vérifier que sur GitHub : le cache `gha`, l'envoi SARIF, le résumé du job et

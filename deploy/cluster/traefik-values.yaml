@@ -1,5 +1,5 @@
 # Values of the official Traefik chart: ingress controller of the cluster, installed once
-# (cluster component, like metrics-server), before "kubectl apply -f deploy/":
+# (cluster component, like metrics-server), before "kubectl apply -k deploy/":
 #   helm repo add traefik https://traefik.github.io/charts
 #   helm upgrade --install traefik traefik/traefik --version 41.7.1 --namespace traefik --create-namespace -f deploy/cluster/traefik-values.yaml
 # Chart 41.7.1 = Traefik v3.7.14. Only the values that differ from the chart defaults, or that

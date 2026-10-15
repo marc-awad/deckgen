@@ -6,7 +6,10 @@ namespace `deckgen`, plus un HorizontalPodAutoscaler pour l'api. Ollama n'est pa
 cluster : il tourne sur Windows et utilise le GPU directement. metrics-server, composant du
 cluster nécessaire au HPA et à `kubectl top`, est décrit dans [deploy/cluster/](../deploy/cluster/).
 Les mises à jour sans interruption et le retour arrière sont décrits dans
-[rolling-update.md](rolling-update.md).
+[rolling-update.md](rolling-update.md). Depuis l'issue 19, l'application est déployée par Argo CD
+depuis la branche `production` (GitOps) : voir [cd.md](cd.md) et [release.md](release.md). Les
+manifestes sont appliqués avec Kustomize (`kubectl apply -k deploy/`,
+[deploy/kustomization.yaml](../deploy/kustomization.yaml)).
 
 ## Ressources
 
@@ -312,7 +315,7 @@ sur le Service api :
 | +98 s                       | 1 %                         | 5 (fenêtre de stabilisation)     |
 | +5 min 37 s                 | 1 %                         | 2 (« All metrics below target »)  |
 
-Pendant la charge, `kubectl apply -f deploy/` laisse l'api à 5 pods (`unchanged`) : sans champ
+Pendant la charge, `kubectl apply -f deploy/` (aujourd'hui `-k`) laisse l'api à 5 pods (`unchanged`) : sans champ
 `replicas`, le manifeste ne contredit pas le HPA.
 
 ### Résultats des tests de résilience
@@ -419,7 +422,7 @@ instance a son identité et ses données. Pour une instance unique, le Deploymen
 
 | Test | Résultat |
 |------|----------|
-| `kubectl apply -f deploy/` | PV `deckgen-postgres` et PVC `postgres-data` créés, PVC **Bound** sur le PV, pod postgres monté sur `postgres-data` |
+| `kubectl apply -f deploy/` (aujourd'hui `-k`) | PV `deckgen-postgres` et PVC `postgres-data` créés, PVC **Bound** sur le PV, pod postgres monté sur `postgres-data` |
 | Suppression du pod postgres | Pod recréé ; log « Database directory appears to contain a database; Skipping initialization » ; deck et ses 5 cartes intacts ; `/api/decks` en 200 **sans redémarrer l'api** (RESTARTS 0 inchangé) |
 | `kubectl delete namespace deckgen` | PV toujours présent, état **Released**, `claimRef` sur l'uid de l'ancienne claim ; données sur le node (62,9 Mo dans `/var/lib/deckgen/postgres/18/docker`) |
 | Redéploiement sans action sur le PV | Nouvelle PVC **Pending** (« volume "deckgen-postgres" already bound to a different claim »), pod postgres `Pending` |
@@ -562,11 +565,11 @@ demande pas n'est pas servi par Traefik.
 | Composant | Fichier | Installé par |
 |-----------|---------|--------------|
 | Contrôleur Traefik (namespace `traefik`), IngressClass `traefik`, CRD Traefik | [deploy/cluster/traefik-values.yaml](../deploy/cluster/traefik-values.yaml) | `helm upgrade --install`, une fois par cluster |
-| Ingress `frontend` et `api`, Middlewares (namespace `deckgen`) | [deploy/ingress.yaml](../deploy/ingress.yaml) | `kubectl apply -f deploy/` |
+| Ingress `frontend` et `api`, Middlewares (namespace `deckgen`) | [deploy/ingress.yaml](../deploy/ingress.yaml) | `kubectl apply -k deploy/`, puis Argo CD ([cd.md](cd.md)) |
 
 Le contrôleur est un composant du cluster, comme metrics-server, et non de l'application :
 supprimer le namespace `deckgen` ne le touche pas. Le Kind `Middleware` est défini par une CRD
-installée par le chart : **Traefik doit être installé avant `kubectl apply -f deploy/`**, sinon
+installée par le chart : **Traefik doit être installé avant `kubectl apply -k deploy/`**, sinon
 l'apply échoue avec `no matches for kind "Middleware" in version "traefik.io/v1alpha1"`.
 
 ### Choix de Traefik
@@ -747,3 +750,4 @@ a été gardé ici car il est plus simple et demandé par l'énoncé.
 | Un seul node               | Les réplicas protègent d'une panne de pod, pas d'une panne de machine : tous les pods sont sur le même node | Cluster multi-node (hors projet) |
 | Ollama hors du cluster     | Point unique de défaillance : s'il est arrêté, les générations échouent (503), sans que Kubernetes puisse le relancer | Hors projet (GPU dans le cluster) |
 | `--kubelet-insecure-tls`   | metrics-server ne vérifie pas le certificat du kubelet        | Certificats du kubelet signés par le cluster (hors Docker Desktop) |
+| Déploiement GitOps par interrogation | Argo CD lit GitHub toutes les 2 à 3 minutes ; sans accès à GitHub, il ne déploie plus (l'application continue de tourner) | Voir [cd.md](cd.md#limites) |

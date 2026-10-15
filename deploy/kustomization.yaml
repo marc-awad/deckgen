@@ -1,0 +1,19 @@
+# Kustomize entry point of the application: "kubectl apply -k deploy/" applies these files, and
+# Argo CD reads this file on the production branch (deploy/cluster/argocd-application.yaml).
+# Not listed, so never applied: cluster/ (cluster components, installed once) and
+# postgres-credentials.yaml.example (the real Secret is created by hand, outside Git).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - postgres-storage.yaml
+  - postgres.yaml
+  - generator.yaml
+  - api.yaml
+  - frontend.yaml
+  - ingress.yaml
+
+# No "images" block here: on develop the manifests keep the local images (deckgen-api:0.1.1...),
+# built with "docker build" for local tests. The deploy job of .github/workflows/release.yml
+# adds it on the production branch: ghcr.io/marc-awad/deckgen-<service>, version and digest.

@@ -110,6 +110,9 @@ jobs:
       KUBECONFORM_VERSION: v0.8.0
       # From the CHECKSUMS file of the release: the download is refused if it was altered
       KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+      # Same version and checksum as the deploy job of release.yml
+      KUSTOMIZE_VERSION: v5.8.2
+      KUSTOMIZE_SHA256: 06af0a202c2b831207d0173f9c9cdb1b30abceca0747cb3fbb72792d26055c95
       # Version of the cluster (Docker Desktop, kubeadm)
       KUBERNETES_VERSION: 1.36.1
     steps:
@@ -131,15 +134,38 @@ jobs:
           echo "${KUBECONFORM_SHA256}  $RUNNER_TEMP/kubeconform.tar.gz" | sha256sum --check --strict
           tar -xzf "$RUNNER_TEMP/kubeconform.tar.gz" -C "$RUNNER_TEMP" kubeconform
 
+      - name: Install kustomize
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/kustomize.tar.gz" \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          echo "${KUSTOMIZE_SHA256}  $RUNNER_TEMP/kustomize.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/kustomize.tar.gz" -C "$RUNNER_TEMP" kustomize
+
+      # A manifest missing from kustomization.yaml would never be deployed, without any error
+      - name: Check that every manifest is listed in kustomization.yaml
+        run: |
+          missing=0
+          for file in deploy/*.yaml; do
+            name="$(basename "$file")"
+            [ "$name" = kustomization.yaml ] && continue
+            if ! grep -qxF "  - $name" deploy/kustomization.yaml; then
+              echo "::error file=$file::$name is not listed in deploy/kustomization.yaml"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      # What "kubectl apply -k deploy/" and Argo CD apply: the output of kustomize, not the files.
       # -strict: unknown fields are errors. Middleware is a Traefik CRD without a schema in the
       # Kubernetes catalog: skipped by name, not with -ignore-missing-schemas, which would also
       # skip a misspelled apiVersion (apps/v2) without any error
       - name: Validate Kubernetes manifests
         run: |
+          "$RUNNER_TEMP/kustomize" build deploy/ > "$RUNNER_TEMP/deckgen.yaml"
           "$RUNNER_TEMP/kubeconform" -strict -summary \
             -kubernetes-version "$KUBERNETES_VERSION" \
             -skip traefik.io/v1alpha1/Middleware \
-            deploy/*.yaml
+            "$RUNNER_TEMP/deckgen.yaml"
 
   images:
     name: images (${{ matrix.service }})
