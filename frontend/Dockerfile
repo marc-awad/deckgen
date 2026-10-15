@@ -20,7 +20,7 @@ RUN npm run build
 
 
 # ---- Final stage: nginx serves the static files and forwards /api to the api ----
-FROM nginxinc/nginx-unprivileged:1.30.5-alpine3.24
+FROM nginxinc/nginx-unprivileged:1.31.5-alpine3.24
 
 # An ARG only exists in the stage that declares it: declared again for the label
 ARG APP_VERSION=dev
