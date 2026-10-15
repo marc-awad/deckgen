@@ -1,0 +1,77 @@
+# Weekly dependency updates, as pull requests to develop (like any feature branch).
+# Grouped to limit the number of PRs. Explained in docs/ci.md.
+version: 2
+
+updates:
+  # Actions of .github/workflows: Dependabot updates the SHA and the version comment together
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+    # A version is proposed only once it is 7 days old: a hijacked release is usually
+    # detected and removed before that
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directories: [/api, /frontend]
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    # One PR per folder for the minor and patch updates; each major update has its own PR,
+    # because it can break the code
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directory: /generator
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
+
+  # Base images of the three Dockerfiles (node, nginx-unprivileged, python)
+  - package-ecosystem: docker
+    directories: [/api, /frontend, /generator]
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      docker-base-images:
+        patterns: ["*"]
+    ignore:
+      # Changing the runtime is a deliberate choice, also made in the CI matrix:
+      # Node 24 (LTS) is kept, and Python 3.13 (3.14 is a "minor" version for Dependabot)
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]

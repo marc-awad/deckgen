@@ -1,5 +1,7 @@
 # deckgen
 
+[![CI](https://github.com/marc-awad/deckgen/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/marc-awad/deckgen/actions/workflows/ci.yml?query=branch%3Adevelop)
+
 Générateur de flashcards par IA : collez un cours, obtenez des cartes prêtes à importer dans Anki.
 
 L'application est composée de trois services (frontend React servi par nginx, api Node.js,
@@ -62,5 +64,6 @@ Linux et macOS, le séparateur est `:` au lieu de `;`. Pour vérifier pendant un
 - [docs/docker-compose.md](docs/docker-compose.md) : architecture des services, réseaux, volumes
 - [docs/docker-images.md](docs/docker-images.md) : Dockerfiles et tailles des images
 - [docs/model-choice.md](docs/model-choice.md) : choix du modèle de langage
+- [docs/ci.md](docs/ci.md) : intégration continue (GitHub Actions), scan Trivy, Dependabot
 - README de chaque service : [api](api/README.md), [generator](generator/README.md),
   [frontend](frontend/README.md) (développement local sans Docker, tests)
