@@ -1,0 +1,12 @@
+# Every deckgen resource lives in this namespace:
+# "kubectl delete namespace deckgen" removes the whole application.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deckgen
+  labels:
+    app.kubernetes.io/part-of: deckgen
+  annotations:
+    # Argo CD never deletes it, even if removed from Git or if the Application is deleted:
+    # deleting the namespace would also delete the Secret postgres-credentials (not in Git)
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false

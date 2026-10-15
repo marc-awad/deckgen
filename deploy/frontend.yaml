@@ -1,0 +1,137 @@
+# Frontend: nginx serves the React app and forwards /api/ to the api.
+# Reachable from the machine through the Ingress (deploy/ingress.yaml): http://deckgen.local
+# Configuration read by the entrypoint of the nginx image at startup
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: deckgen
+data:
+  # Full DNS name: the nginx resolver ignores the search domains of /etc/resolv.conf,
+  # so the short name "api" would not be found
+  API_UPSTREAM: api.deckgen.svc.cluster.local:3000
+  # One nginx worker per CPU of the limit (1) instead of one per core of the machine (22)
+  NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE: "1"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: deckgen
+  annotations:
+    # Shown by "kubectl rollout history": describes the version deployed by this revision
+    kubernetes.io/change-cause: "deckgen-frontend 0.2.0: version shown in the footer and in /version.json"
+spec:
+  # Two pods: the site stays available while one of them is replaced
+  replicas: 2
+  # Update one extra pod at a time, never below 2 ready pods: no capacity lost during an update
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  # A new pod must stay ready 5 s before it counts as available and the next step starts
+  minReadySeconds: 5
+  # Old ReplicaSets kept for "kubectl rollout undo"
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: frontend
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: deckgen
+    spec:
+      enableServiceLinks: false
+      # 5 s of preStop + graceful nginx shutdown (current requests finish) + margin
+      terminationGracePeriodSeconds: 20
+      # nginx user of the unprivileged image (uid and gid 101)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: deckgen-frontend:0.2.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: frontend-config
+          lifecycle:
+            # Keeps serving while the pod is removed from the Service endpoints; then the kubelet
+            # sends the image STOPSIGNAL, SIGQUIT: graceful nginx shutdown
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          # nginx starts in under a second: no startup probe needed.
+          # /health is answered by nginx itself, without calling the api
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          # Measured: 0-4m CPU / 18Mi with 22 workers (less with a single worker)
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: deckgen
+  annotations:
+    # Traefik sends the requests straight to the pods (not through the Service IP), so a
+    # sessionAffinity of the Service would not apply. Sticky cookie instead: all requests of a
+    # browser go to the same pod, so during a rolling update index.html and the hashed assets it
+    # references come from the same version (otherwise: 404 on the JS file)
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.name: deckgen_frontend
+    # Not readable by JavaScript, only sent to this site; no "secure" flag: the site is in HTTP
+    traefik.ingress.kubernetes.io/service.sticky.cookie.httponly: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.samesite: lax
+spec:
+  # Internal address only: the Ingress (deploy/ingress.yaml) is the single entry point
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

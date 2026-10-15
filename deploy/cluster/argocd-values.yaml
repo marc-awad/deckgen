@@ -1,0 +1,111 @@
+# Values of the official Argo CD chart: GitOps controller of the cluster, installed once
+# (cluster component, like Traefik). It watches the production branch and applies deploy/:
+#   helm repo add argo https://argoproj.github.io/argo-helm
+#   helm upgrade --install argocd argo/argo-cd --version 10.9.7 --namespace argocd --create-namespace -f deploy/cluster/argocd-values.yaml --wait
+# Chart 10.9.7 = Argo CD v3.5.4, the first version with the fixes of 4 critical advisories
+# published on 7 October 2026 (GHSA-9v9p-x54c-58gc, GHSA-fw5c-w8rc-j7fx, GHSA-m3vr-7329-44ww,
+# GHSA-fmxq-cgp8-87wp). Only the values that differ from the chart defaults, or that matter
+# for deckgen, are written here. Explained in docs/cd.md.
+
+global:
+  # Used by the Ingress of the user interface below
+  domain: argocd.deckgen.local
+  image:
+    # appVersion of chart 10.9.7, written explicitly: changing the version is a deliberate edit
+    tag: v3.5.4
+
+configs:
+  params:
+    # The server answers in plain HTTP: Traefik has no TLS on this local cluster (HTTP entry
+    # point only). With the default (HTTPS), every HTTP request is redirected to https://,
+    # which Traefik does not serve. Traffic stays on the machine (127.0.0.1)
+    server.insecure: true
+  cm:
+    # Local "admin" account only: no SSO (Dex is disabled below)
+    admin.enabled: true
+    # Git polling: every 120 s plus at most 60 s of random delay (chart defaults, written to show
+    # them). No webhook: GitHub cannot reach this cluster
+    timeout.reconciliation: 120s
+    timeout.reconciliation.jitter: 60s
+
+# SSO (Dex) and notifications (Slack, e-mail...) are not used on a local cluster
+dex:
+  enabled: false
+notifications:
+  enabled: false
+
+# Every Argo CD component runs as a non-root user with a read-only file system and no
+# capabilities: chart defaults, checked with "kubectl get pods -n argocd -o yaml".
+# requests: what the component needs at rest; limits: a ceiling against a runaway process
+
+# Application controller: compares Git with the cluster and applies the differences
+controller:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+
+# API and user interface
+server:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # User interface through Traefik, like the application: http://argocd.deckgen.local
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    # Fallback that browsers resolve by themselves, without the hosts file
+    extraHosts:
+      - name: argocd.deckgen.localhost
+        path: /
+
+# Clones the Git repository and renders the manifests (kustomize build)
+repoServer:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+# Generates Applications from templates: not used here (a single Application)
+applicationSet:
+  replicas: 0
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+# Cache of the controller and of the repo-server
+redis:
+  image:
+    # Default of chart 10.9.7, written explicitly
+    tag: 8.6.4-alpine
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+# Job run at install time to create the Redis password
+redisSecretInit:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

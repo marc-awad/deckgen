@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Makes the "app" package importable from the tests
+pythonpath = ["."]
+# async def tests run on asyncio without any decorator
+asyncio_mode = "auto"
+addopts = "--cov=app --cov-report=term-missing"

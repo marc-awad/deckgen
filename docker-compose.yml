@@ -1,0 +1,106 @@
+# deckgen: the whole application with one command, "docker compose up --build".
+# Ollama runs on the CPU here; docker-compose.gpu.yml gives it an NVIDIA GPU.
+# Values like ${VAR} come from the .env file next to this file (see .env.example).
+
+name: deckgen
+
+# Database account, shared by postgres and api; ":?" stops compose with this message if missing
+x-postgres-credentials: &postgres-credentials
+  POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is missing, copy .env.example to .env}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is missing, copy .env.example to .env}
+  POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is missing, copy .env.example to .env}
+
+services:
+  postgres:
+    image: postgres:18.6-alpine3.24
+    restart: unless-stopped
+    environment: *postgres-credentials
+    volumes:
+      # PostgreSQL 18 stores its data in a versioned subfolder of /var/lib/postgresql
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      # $$: read by the shell inside the container, not replaced by compose
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [back]
+
+  ollama:
+    image: ollama/ollama:0.40.3
+    restart: unless-stopped
+    volumes:
+      # Downloaded models survive "docker compose down"
+      - ollama-models:/root/.ollama
+    healthcheck:
+      # The CLI asks the local server for its models: it fails until the server answers
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [back]
+
+  # One-shot: downloads the model into the ollama volume, then exits (instant once downloaded)
+  ollama-pull:
+    image: ollama/ollama:0.40.3
+    # The image entrypoint is the ollama CLI: this runs "ollama pull <model>"
+    command: ["pull", "${OLLAMA_MODEL:-gemma3:4b}"]
+    environment:
+      # The CLI talks to the ollama service, which stores the model in its volume
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    networks: [back]
+
+  generator:
+    build: ./generator
+    restart: unless-stopped
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
+    depends_on:
+      # The model must be downloaded before the first generation
+      ollama-pull:
+        condition: service_completed_successfully
+    networks: [back]
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    environment:
+      <<: *postgres-credentials
+      DB_HOST: postgres
+      GENERATOR_URL: http://generator:8000
+    depends_on:
+      # The api applies the migrations at startup: the database must accept connections
+      postgres:
+        condition: service_healthy
+    # Only service on both networks: it links the frontend to the backend services
+    networks: [front, back]
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      API_UPSTREAM: api:3000
+    # Only port published on the host: everything else is reached through nginx
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [front]
+
+networks:
+  # frontend and api
+  front:
+  # api and the services it uses: frontend cannot reach postgres, ollama or the generator
+  back:
+
+volumes:
+  postgres-data:
+  ollama-models:

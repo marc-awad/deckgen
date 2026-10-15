@@ -1,0 +1,191 @@
+# REST API: decks and cards in PostgreSQL, calls the generator.
+# Reachable inside the cluster as api:3000. Number of pods managed by the HPA below (2 to 5).
+# Non-sensitive configuration, read by api/src/config.ts at startup; the database
+# credentials come from the Secret postgres-credentials (see README.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+data:
+  # Names of the Services, resolved by the cluster DNS
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  GENERATOR_URL: http://generator:8000
+  # Longer than the generator's own limit (2 attempts of 120 s)
+  GENERATOR_TIMEOUT_MS: "300000"
+  LOG_LEVEL: info
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+  annotations:
+    kubernetes.io/change-cause: "deckgen-api 0.1.1: migration lock, request log, rolling update settings"
+spec:
+  # No "replicas" field: the HorizontalPodAutoscaler sets it. With a value here, each
+  # "kubectl apply" would reset the number of pods chosen by the HPA.
+  # One extra pod at a time, never fewer ready pods than before the update
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  minReadySeconds: 5
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: deckgen
+    spec:
+      enableServiceLinks: false
+      # 5 s of preStop + 10 s of graceful shutdown in the api (SHUTDOWN_TIMEOUT_MS) + margin
+      terminationGracePeriodSeconds: 20
+      # "node" user of the image (USER 1000:1000)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Runs to completion before the api container starts: waits until PostgreSQL accepts
+      # connections, so that the api does not start, fail and restart
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:18.6-alpine3.24
+          imagePullPolicy: IfNotPresent
+          # Same database address as the api, read from its ConfigMap
+          envFrom:
+            - configMapRef:
+                name: api-config
+          command:
+            - sh
+            - -c
+            - until pg_isready -h "$DB_HOST" -p "$DB_PORT"; do echo "waiting for postgres"; sleep 2; done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+          securityContext:
+            # "postgres" user of the image: pg_isready needs a user name, uid 1000 has none here
+            runAsUser: 70
+            runAsGroup: 70
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: api
+          image: deckgen-api:0.1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          # Every key becomes an environment variable: the ConfigMap for the settings, the Secret
+          # for POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB (its only three keys)
+          envFrom:
+            - configMapRef:
+                name: api-config
+            - secretRef:
+                name: postgres-credentials
+          lifecycle:
+            # Keeps serving while the pod is removed from the Service endpoints, then SIGTERM
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          # The server listens only after the migrations: up to 60 s (30 x 2 s) to get there
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+          # /health does not touch the database: a database outage must not restart the api
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # /ready runs SELECT 1: without database, the pod leaves the Service but keeps running
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          # Measured: 1m CPU / 33Mi idle, up to 800m / 98Mi under a request burst
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+# Adds api pods when their average CPU exceeds 70% of the request (70m of 100m),
+# removes them when the load drops. Needs metrics-server (deploy/cluster/).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
