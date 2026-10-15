@@ -1,0 +1,136 @@
+# Generator: turns a course into flashcards with the Ollama of the Windows host (GPU).
+# Reachable inside the cluster as generator:8000.
+# Non-sensitive configuration, read by generator/app/config.py at startup.
+# Values are strings; a change only applies to new pods (kubectl rollout restart).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: generator-config
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: generator
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+data:
+  # Ollama runs on Windows and uses the GPU directly
+  OLLAMA_URL: http://host.docker.internal:11434
+  OLLAMA_MODEL: gemma3:4b
+  # Seconds allowed for one call to Ollama (the generator makes at most 2 attempts)
+  OLLAMA_TIMEOUT: "120"
+  # Context size of the model, in tokens (prompt + answer)
+  OLLAMA_NUM_CTX: "12288"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: generator
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: generator
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+  annotations:
+    kubernetes.io/change-cause: "deckgen-generator 0.1.0: rolling update settings and preStop"
+spec:
+  # Two pods: one can fail or be replaced while the other keeps serving.
+  # No autoscaling: the heavy work is done by Ollama, outside the cluster.
+  replicas: 2
+  # One extra pod at a time, never below 2 ready pods
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  minReadySeconds: 5
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: generator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: generator
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: deckgen
+    spec:
+      enableServiceLinks: false
+      # 5 s of preStop + graceful uvicorn shutdown + margin
+      terminationGracePeriodSeconds: 20
+      # Same user as the image (USER 10001:10001); the pod is refused if it would run as root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: generator
+          image: deckgen-generator:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          # Every key of the ConfigMap becomes an environment variable of the same name
+          envFrom:
+            - configMapRef:
+                name: generator-config
+          lifecycle:
+            # Keeps serving while the pod is removed from the Service endpoints, then SIGTERM
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          # /health never calls Ollama: these probes only check this process.
+          # Startup: up to 30 s (15 x 2 s) to start before the liveness probe takes over
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 15
+          # Restarted after 30 s without answering (3 x 10 s)
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Removed from the Service after 2 failures (about 10 s)
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          # Measured: 3-4m CPU / 41Mi, idle and during a generation (Ollama does the work)
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: generator
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: generator
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: deckgen
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: generator
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

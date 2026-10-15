@@ -1,0 +1,28 @@
+# Kustomize entry point of the application: "kubectl apply -k deploy/" applies these files, and
+# Argo CD reads this file on the production branch (deploy/cluster/argocd-application.yaml).
+# Not listed, so never applied: cluster/ (cluster components, installed once) and
+# postgres-credentials.yaml.example (the real Secret is created by hand, outside Git).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- 00-namespace.yaml
+- postgres-storage.yaml
+- postgres.yaml
+- generator.yaml
+- api.yaml
+- frontend.yaml
+- ingress.yaml
+images:
+- digest: sha256:eff064f70c1272c3758f85773100904d6eea66eec2fb17827f4bb72b79bddfe4
+  name: deckgen-api
+  newName: ghcr.io/marc-awad/deckgen-api
+  newTag: 1.0.0-rc.1
+- digest: sha256:5c7597ddbb463bfcb0f07248f234848331e14b0a3fe9931c0b2308f044e15f08
+  name: deckgen-frontend
+  newName: ghcr.io/marc-awad/deckgen-frontend
+  newTag: 1.0.0-rc.1
+- digest: sha256:805c9b7406eeb0b2d7976cbcf9c97b86fafd2b9dfd4e00b5afccf1ff670daf6f
+  name: deckgen-generator
+  newName: ghcr.io/marc-awad/deckgen-generator
+  newTag: 1.0.0-rc.1

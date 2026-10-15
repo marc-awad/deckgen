@@ -1,0 +1,97 @@
+# PostgreSQL: one pod, reachable inside the cluster as postgres:5432.
+# Credentials come from the Secret postgres-credentials (see README.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: deckgen
+spec:
+  # A single instance: PostgreSQL does not share its data folder between processes
+  replicas: 1
+  # The old pod is stopped before the new one starts: two PostgreSQL must never write the same
+  # files, and a ReadWriteOnce volume cannot be shared by pods on different nodes
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: deckgen
+    spec:
+      # No variables injected for the other Services (e.g. POSTGRES_PORT=tcp://...)
+      enableServiceLinks: false
+      # No runAsNonRoot: the official image starts as root to prepare the data folder,
+      # then runs PostgreSQL as its "postgres" user
+      containers:
+        - name: postgres
+          image: postgres:18.6-alpine3.24
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          # POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB, the only three keys of the Secret.
+          # Only read when the data folder is empty (first start): see README.md
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
+          # Over TCP (-h 127.0.0.1): during the first start the image runs a temporary server
+          # on a Unix socket only, which must not be taken for the real one
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            # The first start initializes the database (initdb) before listening
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          # requests = limits: QoS class Guaranteed, the last pod evicted if the node lacks memory.
+          # Measured: 1m CPU / 106Mi idle, 410m / 115Mi under load
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            # PostgreSQL 18 stores its data in a versioned subfolder of /var/lib/postgresql
+            - name: data
+              mountPath: /var/lib/postgresql
+      volumes:
+        # Persistent storage (postgres-storage.yaml): the data survives the pod
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: deckgen
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: deckgen
+spec:
+  # Internal address only: postgres.deckgen.svc.cluster.local
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

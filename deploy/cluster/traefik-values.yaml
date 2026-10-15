@@ -1,0 +1,91 @@
+# Values of the official Traefik chart: ingress controller of the cluster, installed once
+# (cluster component, like metrics-server), before "kubectl apply -k deploy/":
+#   helm repo add traefik https://traefik.github.io/charts
+#   helm upgrade --install traefik traefik/traefik --version 41.7.1 --namespace traefik --create-namespace -f deploy/cluster/traefik-values.yaml
+# Chart 41.7.1 = Traefik v3.7.14. Only the values that differ from the chart defaults, or that
+# matter for deckgen, are written here.
+
+image:
+  # appVersion of chart 41.7.1, written explicitly: changing the version is a deliberate edit
+  tag: v3.7.14
+
+deployment:
+  replicas: 1
+
+global:
+  # No call to the Internet at startup to look for a newer version, no usage statistics
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+providers:
+  # Traefik resources (Middleware, traefik.io CRDs) used by deploy/ingress.yaml
+  kubernetesCRD:
+    enabled: true
+  # Standard Kubernetes Ingress resources
+  kubernetesIngress:
+    enabled: true
+
+ingressClass:
+  enabled: true
+  name: traefik
+  # Not the default class: an Ingress must ask for Traefik (ingressClassName: traefik)
+  isDefaultClass: false
+
+ports:
+  # Entry point "web": Traefik listens on 8000 in the pod (non-root), the Service publishes 80
+  web:
+    port: 8000
+    exposedPort: 80
+    transport:
+      respondingTimeouts:
+        # Reading the request (headers and body): the Traefik v3 default, enough for bodies of
+        # 100 KB at most, and short against clients that send their request very slowly.
+        # Measured: it does NOT end a request waiting for its response (81 s generation, 201)
+        readTimeout: 60s
+        # Time to send the whole response. A generation can take up to 300 s on the api side:
+        # measured with 60 s, a 72 s generation was cut (empty reply). Default: no limit
+        writeTimeout: 330s
+        # Keep-alive connection without request (default value)
+        idleTimeout: 180s
+  # No TLS on this local cluster: port 443 is not published
+  websecure:
+    expose:
+      default: false
+  # Port 8080 (dashboard, API of Traefik) is not in the Service by default: never published
+
+# Dashboard enabled but not exposed: no IngressRoute, port 8080 kept inside the cluster.
+# Local access only: kubectl port-forward -n traefik deployment/traefik 9000:8080
+api:
+  dashboard: true
+ingressRoute:
+  dashboard:
+    enabled: false
+
+service:
+  # Docker Desktop publishes the ports of a LoadBalancer Service on localhost
+  type: LoadBalancer
+
+additionalArguments:
+  # Waiting for the response headers of a service (api): default no limit, bounded here
+  - --serversTransport.forwardingTimeouts.responseHeaderTimeout=330s
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Chart defaults, written to show them: non-root user, no privilege, read-only file system
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: true
