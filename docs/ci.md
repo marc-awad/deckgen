@@ -188,9 +188,9 @@ Deux cas réels :
 - **tj-actions/changed-files (mars 2025)** : les tags de cette action ont été déplacés vers un
   commit qui affichait les secrets des pipelines dans les logs publics.
 - **aquasecurity/trivy-action (mars 2026, CVE-2026-33634)** : l'action utilisée ici. Le
-  19 mars 2026, des attaquants ont déplacé 75 de ses 76 tags vers un code qui volait les secrets
-  de la CI avant de lancer le vrai scan : les pipelines semblaient fonctionner normalement. La
-  fenêtre a duré environ 12 heures. Les workflows épinglés par SHA n'ont pas été touchés.
+  19 mars 2026, des attaquants ont déplacé 76 de ses 77 tags vers un code qui volait les secrets
+  de la CI avant de lancer le vrai scan : les pipelines semblaient fonctionner normalement. Les
+  workflows épinglés par SHA n'ont pas été touchés.
 
 Un SHA ne protège pas d'un code malveillant déjà présent dans ce commit : il garantit seulement que
 le code ne change pas sans qu'on le voie. Les mises à jour passent alors par une PR de Dependabot,

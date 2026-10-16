@@ -64,7 +64,7 @@ documentation détaillée du dépôt.</p>
 | Docker Compose | [4](#conteneurisation-et-docker-compose) | `docker-compose.yml` | Healthchecks, `depends_on` conditionnels |
 | Déploiement et mise à l'échelle sur Kubernetes | [5](#kubernetes), [6](#démonstrations) | `deploy/api.yaml` (HPA) | HPA de 2 à 5 pods sous charge |
 | Objets essentiels | [5](#kubernetes) | `deploy/` | Namespace, Deployment, Service, ConfigMap, Secret, PV, PVC, HPA, Ingress |
-| Mises à jour sans interruption | [6](#démonstrations) | `deploy/frontend.yaml` | 748 requêtes sur 748 en HTTP 200, figure 3 |
+| Mises à jour sans interruption | [6](#démonstrations) | `deploy/frontend.yaml` | 0 erreur sur 379 visites complètes (page et script) pendant un rolling update, avec le cookie d'affinité Traefik ; figure 3 |
 | Auto-réparation | [6](#démonstrations) | probes, Argo CD | 57 requêtes sur 57, liveness, self-heal (figure 4) |
 | CI/CD | [7](#cicd) | `.github/workflows/` | Exécutions réussies, captures |
 | **Règles d'usage de l'IA** | | | |
@@ -200,7 +200,7 @@ Détails : [docs/kubernetes.md](https://github.com/marc-awad/deckgen/blob/develo
 | Auto-réparation (pod api supprimé, requêtes toutes les 200 ms) | Pod recréé en 2 s ; **57 requêtes sur 57 en HTTP 200** |
 | Readiness (PostgreSQL à 0 réplica) | Pods api retirés du Service en moins de 10 s, RESTARTS inchangé ; de nouveau Ready au retour de la base |
 | Liveness (processus d'un generator figé) | 3 échecs de liveness, conteneur redémarré en 63 s |
-| Rolling update et rollback (frontend 0.1.0 → 0.2.0 → 0.1.0) | **748 requêtes sur 748 en HTTP 200** sur le cycle complet |
+| Rolling update et rollback (frontend 0.1.0 → 0.2.0 → 0.1.0) | 748 requêtes sur 748 en HTTP 200 ; mais 93 chargements de page sur 318 en échec sur le script avant la correction (affinité), puis 0 sur 379 avec le cookie Traefik |
 | Persistance (pod postgres supprimé) | Base retrouvée (« Skipping initialization »), deck intact, api sans redémarrage |
 | Self-heal d'Argo CD (frontend passé à 3 pods à la main) | Argo CD remet les 2 pods déclarés dans Git |
 
@@ -277,7 +277,7 @@ Détails : [docs/rolling-update.md](https://github.com/marc-awad/deckgen/blob/de
 |-------|---------------------|-----------------|
 | Node.js pour l'api | ASP.NET Core | TypeScript partagé avec le frontend, image plus légère ; l'auteur souhaitait ne pas utiliser ASP.NET |
 | LLM local (Ollama) | API payante | Gratuit, les cours restent sur la machine |
-| `gemma3:4b` | `gemma4:latest` | 14,7 s contre 36,6 s, 3,4 Go contre 9,6 Go, tient dans les 6 Go du GPU |
+| `gemma3:4b` | `gemma4:latest` | 13 à 17 s contre 58 à 87 s pour 10 cartes (diagnostic de l'issue #27), 3,4 Go contre 9,6 Go, tient dans les 6 Go du GPU |
 | Ollama sur l'hôte (Kubernetes) | Ollama dans le cluster | Accès direct au GPU, cluster local limité |
 | PGlite pour les tests | Base de test dans un conteneur | Vraies migrations PostgreSQL en mémoire, aucun service externe en CI |
 | Drizzle ORM | Prisma | Léger, proche du SQL, pas de moteur binaire dans l'image |

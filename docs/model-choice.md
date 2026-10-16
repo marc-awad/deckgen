@@ -45,6 +45,16 @@ Un script temporaire appelait directement l'API Ollama avec exactement le prompt
 - Le nettoyage ne retire aucune carte : le modèle produit lui-même une seule carte.
 - Les réponses à une carte sont toutes écrites en JSON compact sur une ligne.
 
+Durées mesurées pendant le diagnostic (cours Java, `count=10`, `num_ctx` 8192) :
+
+| Configuration | Essai 1 | Essai 2 | Essai 3 |
+|---|---|---|---|
+| a. gemma3:4b, prompt actuel | 13,5 s (10 cartes) | 16,7 s (10 cartes) | 1,9 s (1 carte) |
+| b. gemma3:4b, sans la consigne « génère moins de cartes » | 3,5 s (1 carte) | 16,8 s (10 cartes) | 2,0 s (1 carte) |
+| d. gemma4:latest | 86,7 s (10 cartes, dont 24,6 s de chargement du modèle) | 63,5 s (10 cartes) | 58,4 s (10 cartes) |
+
+Pour une comparaison juste, seuls les essais à 10 cartes sont comparables : 13,5 à 16,8 s pour gemma3:4b, contre 58,4 à 86,7 s pour gemma4:latest.
+
 ### Cause
 Le JSON schema n'imposait ni minimum ni maximum de cartes. La grammaire d'Ollama autorisait donc à fermer le tableau `cards` dès la première carte, et gemma3:4b le faisait dans 3 essais sur 6 (configurations a et b). Sans maximum, il pouvait aussi dépasser `count` (19 cartes).
 

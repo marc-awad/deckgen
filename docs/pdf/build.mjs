@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import MarkdownIt from "markdown-it";
 import anchor from "markdown-it-anchor";
+import { PDFDocument } from "pdf-lib";
 import puppeteer from "puppeteer";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -117,3 +118,8 @@ try {
 } finally {
   await browser.close();
 }
+
+// Chrome only writes the title in the PDF metadata: the author is added here
+const pdf = await PDFDocument.load(readFileSync(output), { updateMetadata: false });
+pdf.setAuthor("Marc Awad");
+writeFileSync(output, await pdf.save());

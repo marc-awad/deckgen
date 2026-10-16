@@ -11,6 +11,7 @@
     "markdown-it": "15.0.2",
     "markdown-it-anchor": "10.0.0",
     "pagedjs": "0.4.3",
+    "pdf-lib": "1.17.1",
     "puppeteer": "24.43.1"
   }
 }
