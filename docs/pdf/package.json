@@ -1,0 +1,16 @@
+{
+  "name": "deckgen-dossier-pdf",
+  "private": true,
+  "description": "Generates docs/dossier-technique.pdf and the diagrams of docs/images/diagrams (see docs/build-pdf.ps1)",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "11.17.0",
+    "markdown-it": "15.0.2",
+    "markdown-it-anchor": "10.0.0",
+    "pagedjs": "0.4.3",
+    "puppeteer": "24.43.1"
+  }
+}

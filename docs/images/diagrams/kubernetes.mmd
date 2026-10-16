@@ -1,0 +1,27 @@
+%% Kubernetes objects of the deckgen namespace and their links (deploy/).
+%% Rendered to kubernetes.svg by docs/build-pdf.ps1.
+flowchart TB
+    user([Navigateur]) -- "deckgen.local:80" --> traefik[Traefik<br/>Service LoadBalancer :80<br/>namespace traefik]
+
+    subgraph ns [namespace deckgen]
+        ing[/Ingress frontend : /<br/>Ingress api : /api/]
+        mw[/Middlewares<br/>strip-prefix, headers/]
+        svcF[Service frontend<br/>ClusterIP 8080] --> podF[Pods frontend x2]
+        svcA[Service api<br/>ClusterIP 3000] --> podA[Pods api x2 à 5<br/>initContainer]
+        hpa{{HPA api<br/>CPU 70 %}} -. replicas .-> podA
+        podA --> svcP[Service postgres<br/>ClusterIP 5432]
+        svcP --> podP[Pod postgres x1<br/>Recreate]
+        podP --> pvc[(PVC postgres-data)]
+        podA --> svcG[Service generator<br/>ClusterIP 8000]
+        svcG --> podG[Pods generator x2]
+        secret[/Secret<br/>postgres-credentials/] -. envFrom .-> podP
+        secret -. envFrom .-> podA
+        cm[/ConfigMaps<br/>api, generator, frontend/] -. envFrom .-> podA
+    end
+
+    traefik -. lit .-> ing
+    ing -. annotation .-> mw
+    traefik -- "/ (cookie)" --> podF
+    traefik -- "/api" --> podA
+    pvc -- "volumeName" --> pv[(PV deckgen-postgres<br/>1 Gi, Retain, hostPath)]
+    podG -- "host.docker.internal:11434" --> ollama[Ollama sur Windows<br/>GPU]

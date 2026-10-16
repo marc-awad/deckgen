@@ -1,0 +1,25 @@
+%% Docker Compose: services, networks and volumes (docker-compose.yml).
+%% Rendered to compose.svg by docs/build-pdf.ps1.
+flowchart LR
+    user([Navigateur]) -- "localhost:8080" --> frontend
+
+    subgraph front [réseau front]
+        frontend[frontend<br/>nginx :8080]
+        api[api<br/>Node.js :3000]
+    end
+
+    subgraph back [réseau back]
+        api
+        generator[generator<br/>FastAPI :8000]
+        postgres[(postgres<br/>:5432)]
+        ollama[ollama<br/>:11434]
+        pull[ollama-pull<br/>ponctuel]
+    end
+
+    frontend -- "/api/*" --> api
+    api --> postgres
+    api --> generator
+    generator --> ollama
+    pull -. "ollama pull" .-> ollama
+    postgres --- vpg[(volume<br/>postgres-data)]
+    ollama --- vol[(volume<br/>ollama-models)]

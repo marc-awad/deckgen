@@ -1,0 +1,12 @@
+%% Services and flows of deckgen, in both modes (Docker Compose and Kubernetes).
+%% Rendered to architecture.svg by docs/build-pdf.ps1.
+flowchart LR
+    user([Navigateur])
+    user -- "Kubernetes : deckgen.local:80" --> traefik[Traefik<br/>contrôleur Ingress]
+    user -- "Compose : localhost:8080" --> frontend
+    traefik -- "/" --> frontend[frontend<br/>nginx + React<br/>:8080]
+    traefik -- "/api (préfixe retiré)" --> api
+    frontend -- "/api/* (Compose)" --> api[api<br/>Node.js, Express<br/>:3000]
+    api -- "SQL :5432" --> postgres[(PostgreSQL<br/>volume persistant)]
+    api -- "HTTP :8000" --> generator[generator<br/>Python, FastAPI<br/>:8000]
+    generator -- "HTTP :11434" --> ollama[Ollama<br/>gemma3:4b]

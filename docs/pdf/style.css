@@ -1,0 +1,327 @@
+/* Layout of docs/dossier-technique.pdf. CSS Paged Media, applied by Paged.js in Chrome:
+   A4 pages, page numbers in the footer, a page break before each part, numbered figures. */
+
+@page {
+  size: A4;
+  margin: 20mm 18mm 20mm 18mm;
+  @bottom-left {
+    content: "deckgen : dossier technique";
+    font-size: 8pt;
+    color: #6b7280;
+  }
+  @bottom-right {
+    content: "Page " counter(page) " / " counter(pages);
+    font-size: 8pt;
+    color: #6b7280;
+  }
+}
+
+/* Cover page: no footer */
+@page cover {
+  margin: 0;
+  @bottom-left { content: none; }
+  @bottom-right { content: none; }
+}
+
+:root {
+  --text: #1f2937;
+  --muted: #6b7280;
+  --accent: #1d4ed8;
+  --border: #cbd5e1;
+  --header: #e8eef9;
+  --code: #f3f4f6;
+}
+
+html {
+  font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 10pt;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+body {
+  margin: 0;
+  counter-reset: figure;
+}
+
+/* ---- Cover ---- */
+.cover {
+  page: cover;
+  height: 297mm;
+  box-sizing: border-box;
+  padding: 55mm 25mm 25mm;
+  background: linear-gradient(160deg, #1e3a8a 0%, #1d4ed8 55%, #3b82f6 100%);
+  color: white;
+  display: flex;
+  flex-direction: column;
+}
+.cover h1 {
+  font-size: 34pt;
+  line-height: 1.15;
+  margin: 0 0 6mm;
+  font-weight: 600;
+}
+.cover .subtitle {
+  font-size: 15pt;
+  margin: 0 0 30mm;
+  opacity: 0.95;
+}
+.cover table.meta {
+  border: none;
+  font-size: 11pt;
+  width: auto;
+  margin: 0;
+}
+.cover table.meta td {
+  border: none;
+  padding: 1.2mm 6mm 1.2mm 0;
+  background: none;
+  color: white;
+  vertical-align: top;
+}
+.cover table.meta td:first-child {
+  opacity: 0.75;
+  white-space: nowrap;
+}
+.cover a {
+  color: white;
+}
+.cover .bottom {
+  margin-top: auto;
+  font-size: 9pt;
+  opacity: 0.8;
+}
+
+/* ---- Table of contents ---- */
+.toc {
+  break-after: page;
+}
+.toc h2 {
+  break-before: auto;
+}
+.toc ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.toc li {
+  margin: 0;
+}
+.toc h2 {
+  font-size: 15pt;
+  padding-bottom: 1mm;
+  margin-bottom: 2mm;
+}
+.toc li.level-2 {
+  margin-top: 0.5mm;
+  font-weight: 600;
+  font-size: 9pt;
+  line-height: 1.15;
+}
+.toc li.level-3 {
+  padding-left: 8mm;
+  font-size: 8.2pt;
+  line-height: 1.08;
+}
+.toc a {
+  display: flex;
+  color: var(--text);
+  text-decoration: none;
+}
+.toc a .title {
+  flex: 0 1 auto;
+}
+.toc a .dots {
+  flex: 1 1 auto;
+  border-bottom: 1px dotted var(--muted);
+  margin: 0 2mm 1.2mm;
+}
+.toc a::after {
+  content: target-counter(attr(href), page);
+  flex: 0 0 auto;
+}
+
+/* ---- Headings ---- */
+h1, h2, h3, h4 {
+  color: #111827;
+  line-height: 1.25;
+  break-after: avoid;
+}
+h2 {
+  break-before: page;
+  font-size: 18pt;
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 2mm;
+  margin: 0 0 5mm;
+}
+h3 {
+  font-size: 12.5pt;
+  margin: 6mm 0 2.5mm;
+}
+h4 {
+  font-size: 10.5pt;
+  margin: 4mm 0 1.5mm;
+}
+h2.no-break {
+  break-before: auto;
+  margin-top: 8mm;
+}
+h2 .num, h3 .num {
+  color: var(--muted);
+  margin-right: 2mm;
+}
+
+p {
+  margin: 0 0 2.5mm;
+  orphans: 3;
+  widows: 3;
+}
+ul, ol {
+  margin: 0 0 2.5mm;
+  padding-left: 6mm;
+}
+li {
+  margin-bottom: 0.8mm;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+strong {
+  color: #111827;
+}
+
+/* ---- Tables ---- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 2mm 0 4mm;
+  font-size: 8.6pt;
+  line-height: 1.35;
+}
+th, td {
+  border: 1px solid var(--border);
+  padding: 1.4mm 2mm;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  background: var(--header);
+  font-weight: 600;
+}
+tr {
+  break-inside: avoid;
+}
+table.keep {
+  break-inside: avoid;
+}
+thead {
+  display: table-header-group;
+}
+
+/* ---- Code ---- */
+code {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 0.9em;
+  background: var(--code);
+  padding: 0 1mm;
+  border-radius: 1mm;
+}
+pre {
+  background: var(--code);
+  border: 1px solid #e5e7eb;
+  border-left: 3px solid var(--accent);
+  padding: 2.5mm 3mm;
+  margin: 2mm 0 4mm;
+  font-size: 8pt;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+  break-inside: avoid;
+}
+pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* ---- Figures: centred image and numbered caption ---- */
+figure {
+  margin: 3mm 0 5mm;
+  text-align: center;
+  break-inside: avoid;
+}
+figure img {
+  max-width: 100%;
+  max-height: 125mm;
+  border: 1px solid var(--border);
+}
+figure img.diagram {
+  border: none;
+}
+figure.w40 img { width: 40%; }
+figure.w45 img { width: 45%; }
+figure.w55 img { width: 55%; }
+figure.w75 img { width: 75%; }
+figure.w50 img { width: 50%; }
+figure.w60 img { width: 60%; }
+figure.w70 img { width: 70%; }
+figure.w80 img { width: 80%; }
+figure.w90 img { width: 90%; }
+figure.w100 img { width: 100%; }
+/* Two figures side by side: <div class="figrow"> around two images */
+.figrow {
+  display: flex;
+  gap: 5mm;
+  align-items: flex-end;
+  break-inside: avoid;
+}
+.figrow figure {
+  flex: 1 1 0;
+  margin-bottom: 3mm;
+}
+.figrow figure img {
+  width: 100%;
+  max-height: 95mm;
+  object-fit: contain;
+}
+figcaption {
+  counter-increment: figure;
+  font-size: 8.6pt;
+  color: var(--muted);
+  margin-top: 1.5mm;
+}
+figcaption::before {
+  content: "Figure " counter(figure) " : ";
+  font-weight: 600;
+}
+
+/* ---- Callouts and key figures ---- */
+.keyfigures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3mm;
+  margin: 3mm 0 4mm;
+}
+.keyfigures div {
+  flex: 1 1 28%;
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+  padding: 2mm 3mm;
+  font-size: 8.6pt;
+  color: var(--muted);
+}
+.keyfigures b {
+  display: block;
+  font-size: 15pt;
+  color: #111827;
+}
+.note {
+  border-left: 3px solid #f59e0b;
+  background: #fffbeb;
+  padding: 2mm 3mm;
+  margin: 2mm 0 4mm;
+}

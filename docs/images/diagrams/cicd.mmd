@@ -1,0 +1,23 @@
+%% CI on every pull request, then release on a version tag and GitOps deployment.
+%% Rendered to cicd.svg by docs/build-pdf.ps1.
+flowchart LR
+    pr([PR vers develop ou main<br/>push sur develop]) --> ci
+
+    subgraph ci [CI : ci.yml, 9 status checks]
+        checks[generator, api x2, frontend x2,<br/>config] --> images[images x3<br/>build + Trivy]
+    end
+
+    images -- "merge commit<br/>develop vers main" --> tag([tag vX.Y.Z<br/>sur main])
+
+    subgraph rel [Release : release.yml]
+        verify[verify] --> publish[publish x3<br/>build, push, attestation]
+        publish --> scan[scan x3<br/>Trivy par digest]
+        scan --> deploy[Déploiement<br/>sur Kubernetes]
+    end
+
+    tag --> verify
+    publish --> ghcr[(GHCR)]
+    deploy -- "git push" --> prod[(branche<br/>production)]
+    argo[Argo CD<br/>dans le cluster] -- "lit toutes les 2 à 3 min" --> prod
+    argo -- "kubectl apply" --> cluster[namespace deckgen]
+    cluster -- "pull par digest" --> ghcr
