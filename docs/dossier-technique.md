@@ -82,7 +82,7 @@ documentation détaillée du dépôt.</p>
 | api | API REST : decks, cartes, génération, export Anki | Node.js 24, Express 5, TypeScript, Drizzle ORM, zod | `node:24.21.0-alpine3.24` | 3000 |
 | generator | Transforme un cours en cartes en appelant Ollama | Python 3.13, FastAPI, httpx, pydantic | `python:3.13.16-slim-trixie` | 8000 |
 | postgres | Stockage des decks et des cartes | PostgreSQL 18.6 | `postgres:18.6-alpine3.24` | 5432 |
-| ollama | Serveur du modèle de langage | Ollama 0.40.3, `gemma3:4b` | `ollama/ollama:0.40.3` (Compose) ; installé sur Windows (Kubernetes) | 11434 |
+| ollama | Serveur du modèle de langage | Ollama 0.40.3 (Compose) ; sur l'hôte en mode Kubernetes, version non fixée (mises à jour automatiques d'Ollama) ; `gemma3:4b` | `ollama/ollama:0.40.3` (Compose) ; installé sur Windows (Kubernetes) | 11434 |
 
 **Fonctionnalités** : création d'un deck à partir d'un cours (50 à 20 000 caractères, 1 à 30
 cartes au plus), génération bornée selon la longueur du cours, modification et suppression des

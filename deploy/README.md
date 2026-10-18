@@ -509,7 +509,25 @@ kubectl apply -f deploy/cluster/argocd-application.yaml   # rétablit prune et s
 
 Vérifié : après le `patch`, `spec.syncPolicy.automated` est vide ; après le nouvel `apply` du
 fichier, il revient à `{"prune":true,"selfHeal":true}`. Pendant la suspension, l'interface montre
-les différences (bouton **App Diff**) ;
+les différences (bouton **App Diff**).
+
+**Piège : l'api repasse à 1 pod.** Argo CD (option `RespectIgnoreDifferences`) a écrit
+`replicas: 2` dans l'annotation `last-applied-configuration` de l'api, alors que le manifeste n'a
+pas ce champ. Pour kubectl, le champ a donc été retiré du fichier : `kubectl apply -k deploy/` le
+remet à sa valeur par défaut, 1 pod, jusqu'à ce que le HPA remonte à 2 (en moins d'une minute).
+Pour l'éviter, aligner d'abord l'annotation sur les fichiers, sans modifier les objets :
+
+```powershell
+kubectl kustomize deploy/ | kubectl apply set-last-applied -f - --dry-run=server -o name   # contrôle
+kubectl kustomize deploy/ | kubectl apply set-last-applied -f -
+kubectl apply -k deploy/              # l'api garde son nombre de pods
+```
+
+`kubectl apply edit-last-applied deployment/api -n deckgen` fait la même chose à la main (supprimer
+la ligne `replicas` dans l'éditeur qui s'ouvre), mais n'a pas d'option `--dry-run`. Vérifié : en
+dry-run serveur sur le cluster, `set-last-applied` retire `replicas` de l'annotation de l'api sans
+toucher à son nombre de pods ; dans un namespace de test reproduisant cette annotation, un
+`kubectl apply` sans le champ passe de 2 pods à 1, et reste à 2 après `set-last-applied` ;
 
 3. **un autre namespace** : déconseillé ici. Les manifestes fixent le namespace `deckgen`, le
    PersistentVolume `deckgen-postgres` (ressource du cluster) ne peut être lié qu'à une seule

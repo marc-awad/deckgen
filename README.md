@@ -46,7 +46,7 @@ Kubernetes, Traefik est le point d'entrée unique : il envoie `/` au frontend et
 | api | API REST, stockage, export Anki | Node.js 24, Express 5, TypeScript, Drizzle ORM | `node:24.21.0-alpine3.24` | 3000 |
 | generator | Transforme un cours en cartes | Python 3.13, FastAPI, httpx | `python:3.13.16-slim-trixie` | 8000 |
 | postgres | Decks et cartes | PostgreSQL 18.6 | `postgres:18.6-alpine3.24` | 5432 |
-| ollama | Serveur du modèle de langage | Ollama 0.40.3 | `ollama/ollama:0.40.3` (Compose) ; installé sur l'hôte (Kubernetes) | 11434 |
+| ollama | Serveur du modèle de langage | Ollama 0.40.3 (Compose) ; sur l'hôte en mode Kubernetes, version non fixée (mises à jour automatiques d'Ollama) | `ollama/ollama:0.40.3` (Compose) ; installé sur l'hôte (Kubernetes) | 11434 |
 
 ## Prérequis
 

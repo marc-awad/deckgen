@@ -261,7 +261,8 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/roo
   aquasec/trivy:0.75.0 image --severity CRITICAL --ignore-unfixed --exit-code 1 deckgen-api:ci-local
 ```
 
-Images reconstruites avec les Dockerfiles actuels (tag `ci-local`), comme en CI :
+Images reconstruites avec les Dockerfiles actuels (tag `ci-local`), comme en CI ; chiffres du
+**14 octobre 2026** :
 
 | Image | Base | CRITICAL | HIGH (corrigeables) | MEDIUM (corrigeables) | LOW | Règle d'échec |
 |-------|------|----------|---------------------|-----------------------|-----|---------------|
@@ -284,6 +285,13 @@ Détail des vulnérabilités corrigeables, non bloquantes :
   comme npm est supprimé de l'image de l'api ; il ne sert pas à l'exécution.
 - Les 44 autres HIGH du generator sont des paquets Debian (`util-linux`, `ncurses`, `systemd`,
   `perl-base`) sans correctif publié par Debian.
+
+**Nouveau scan, 18 octobre 2026** (même version de Trivy, base de vulnérabilités du 18/10, mêmes
+Dockerfiles) : le frontend a désormais **1 HIGH corrigeable**, `libexpat` 2.8.5-r0
+(CVE-2026-77214), corrigé en 2.9.0-r0 dans les dépôts Alpine ; il disparaîtra avec la prochaine
+image de base `nginx-unprivileged`. Les nombres de l'api et du generator sont inchangés, et il n'y
+a **toujours aucune CRITICAL** : la règle d'échec passe. Une même image peut donc gagner des
+vulnérabilités sans changer : ce sont les nouvelles failles publiées qui les font apparaître.
 
 ## Dependabot
 

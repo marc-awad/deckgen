@@ -27,8 +27,8 @@ React Router qui affiche la bonne page selon l'adresse. Si l'utilisateur recharg
 Ce fichier n'existe pas : le serveur doit donc renvoyer `index.html` pour toute adresse qui ne
 correspond pas à un fichier (et qui ne commence pas par `/api`), sinon il répond 404.
 
-En développement, le serveur de Vite le fait déjà. En production, nginx devra être configuré
-avec `try_files $uri /index.html;`.
+En développement, le serveur de Vite le fait déjà. En production, nginx le fait avec
+`try_files $uri $uri/ /index.html;`, dans [nginx/default.conf.template](nginx/default.conf.template).
 
 ## Versions de Node
 
