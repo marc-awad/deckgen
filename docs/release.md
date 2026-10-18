@@ -52,9 +52,9 @@ Réglage, dans **Settings > Rules > Rulesets > protect-main** :
 2. ne garder que **Merge** (décocher **Squash** et **Rebase**) ;
 3. **Save changes**.
 
-Aujourd'hui, `protect-main` autorise les trois méthodes (`allowed_merge_methods: merge, squash,
-rebase`, lu par l'API) : ce réglage est à faire avant la première release. Le bouton de fusion de
-la PR ne proposera plus que « Create a merge commit ».
+Ce réglage a été fait avant la première release : `protect-main` n'autorise plus que le merge
+commit (`allowed_merge_methods: merge`, lu par l'API), alors qu'il acceptait au départ les trois
+méthodes. Le bouton de fusion des PR vers `main` ne propose plus que « Create a merge commit ».
 
 ### Bonus : ruleset des tags de version
 

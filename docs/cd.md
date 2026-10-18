@@ -260,11 +260,14 @@ redirection de port.
 | finalizer | **aucun** | Supprimer l'Application laisse l'application en place |
 
 - **HPA et `replicas`** : le Deployment `api` n'a pas de champ `replicas` dans Git (c'est le HPA qui
-  le fixe, issue 13), et l'annotation `last-applied-configuration` actuelle ne le contient pas
-  (vérifié) : Argo CD ne voit donc pas de différence. `ignoreDifferences` le garantit même si le
-  champ réapparaissait, et `RespectIgnoreDifferences=true` étend la règle à la synchronisation
-  elle-même : sans cette option, le champ serait ignoré dans la comparaison, mais réécrit à chaque
-  synchronisation.
+  le fixe, issue 13). `ignoreDifferences` fait ignorer ce champ dans la comparaison, et
+  `RespectIgnoreDifferences=true` étend la règle à la synchronisation elle-même : Argo CD reprend
+  la valeur du cluster pour ce champ avant d'appliquer, au lieu de la remplacer. Conséquence,
+  constatée depuis la première synchronisation : l'annotation `last-applied-configuration` de
+  l'api contient maintenant `replicas: 2` (la valeur du moment), alors que le manifeste de Git
+  n'en a pas. Pour Argo CD, c'est sans effet ; en revanche, un `kubectl apply -k deploy/` manuel
+  (synchronisation suspendue) ramènerait l'api à 1 pod, le temps que le HPA remonte à 2 : la
+  parade est dans [deploy/README.md](../deploy/README.md#argo-cd-et-commandes-locales).
 - **`ApplyOutOfSyncOnly`** : seuls les objets différents de Git sont appliqués, pas les 19 à
   chaque fois.
 - **`PruneLast`** : les suppressions passent en dernier, une fois le reste synchronisé et en bonne
