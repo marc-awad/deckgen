@@ -1,0 +1,21 @@
+%% Release and GitOps deployment (.github/workflows/release.yml and Argo CD).
+%% Rendered to release.svg by docs/build-pdf.ps1.
+flowchart LR
+    tag([tag vX.Y.Z<br/>sur main]) --> verify
+
+    subgraph gha [GitHub Actions : release.yml]
+        verify[verify<br/>SemVer, commit sur main] --> publish[publish x3<br/>build, push,<br/>provenance, SBOM]
+        publish --> scan[scan x3<br/>Trivy par digest]
+        scan --> deploy[Déploiement<br/>sur Kubernetes]
+        deploy --> summary[summary]
+    end
+
+    publish -- "GITHUB_TOKEN" --> ghcr[(GHCR<br/>deckgen-*)]
+    deploy -- "git push" --> prod[(branche production<br/>version et digest)]
+
+    subgraph cluster [Cluster Docker Desktop]
+        argo[Argo CD] -- "kubectl apply" --> app[namespace deckgen]
+    end
+
+    argo -- "lit toutes les 2 à 3 min" --> prod
+    app -- "pull par digest" --> ghcr

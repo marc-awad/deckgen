@@ -1,0 +1,22 @@
+%% CI pipeline (.github/workflows/ci.yml): jobs and dependencies.
+%% Rendered to ci.svg by docs/build-pdf.ps1.
+flowchart LR
+    trigger([push develop<br/>PR vers develop ou main])
+
+    subgraph checks [Vérifications en parallèle]
+        gen[generator<br/>ruff, pytest]
+        api[api<br/>Node 20.19 et 24<br/>lint, typecheck, test]
+        front[frontend<br/>Node 20.19 et 24<br/>lint, typecheck, test, build]
+        conf[config<br/>compose config<br/>kustomize + kubeconform]
+    end
+
+    subgraph imgs [images, une par service]
+        build[Build Buildx<br/>sans push, cache gha] --> report[Trivy : rapport]
+        report --> sarif[Trivy : SARIF<br/>onglet Security]
+        sarif --> gate{CRITICAL<br/>corrigeable ?}
+    end
+
+    trigger --> gen & api & front & conf
+    gen & api & front & conf --> build
+    gate -- non --> ok([succès])
+    gate -- oui --> ko([échec])

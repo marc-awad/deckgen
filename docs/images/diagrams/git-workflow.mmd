@@ -1,0 +1,25 @@
+%% Git workflow: work branches squashed into develop, develop merged into main (merge commit),
+%% version tags on main. v1.0.0-rc.1 and v1.0.0 point to the same merge commit (PR #52).
+%% Rendered to git-workflow.svg by docs/build-pdf.ps1.
+gitGraph
+    commit id: "initial commit"
+    branch develop
+    checkout develop
+    branch feature/api
+    checkout feature/api
+    commit id: "routes"
+    commit id: "tests"
+    checkout develop
+    merge feature/api id: "feat(api) #26 (squash)" type: HIGHLIGHT
+    branch fix/generator
+    checkout fix/generator
+    commit id: "bornes du JSON schema"
+    checkout develop
+    merge fix/generator id: "fix(generator) #29 (squash)" type: HIGHLIGHT
+    branch feature/release
+    checkout feature/release
+    commit id: "workflow release"
+    checkout develop
+    merge feature/release id: "feat(release) #51 (squash)" type: HIGHLIGHT
+    checkout main
+    merge develop id: "Merge PR #52" tag: "v1.0.0-rc.1 et v1.0.0"
