@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Build stage: compile the React app into static files (dist/) ----
-FROM node:24.21.0-alpine3.24 AS build
+FROM node:24.22.0-alpine3.24 AS build
 WORKDIR /app
 
 # Dependencies before the code: npm ci stays cached while the package files are unchanged
@@ -20,7 +20,7 @@ RUN npm run build
 
 
 # ---- Final stage: nginx serves the static files and forwards /api to the api ----
-FROM nginxinc/nginx-unprivileged:1.30.5-alpine3.24
+FROM nginxinc/nginx-unprivileged:1.30.6-alpine3.24
 
 # An ARG only exists in the stage that declares it: declared again for the label
 ARG APP_VERSION=dev
