@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Stage 1: all dependencies (TypeScript included) and compilation to dist/ ----
-FROM node:24.21.0-alpine3.24 AS build
+FROM node:24.22.0-alpine3.24 AS build
 WORKDIR /app
 
 # Dependencies before the code: npm ci stays cached while the package files are unchanged
@@ -14,7 +14,7 @@ RUN npm run build
 
 
 # ---- Stage 2: production dependencies only ----
-FROM node:24.21.0-alpine3.24 AS prod-deps
+FROM node:24.22.0-alpine3.24 AS prod-deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -24,7 +24,7 @@ RUN npm ci --omit=dev --omit=optional
 
 
 # ---- Final stage: Node runtime, compiled code, migrations and production dependencies ----
-FROM node:24.21.0-alpine3.24
+FROM node:24.22.0-alpine3.24
 
 LABEL org.opencontainers.image.title="deckgen-api" \
       org.opencontainers.image.description="deckgen REST API: decks and cards in PostgreSQL, generation and Anki export" \
